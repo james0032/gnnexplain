@@ -7,6 +7,7 @@ from torch_geometric.explain import Explainer, GNNExplainer
 import numpy as np
 from typing import Dict, Tuple, List
 import pickle
+import argparse
 
 
 class DistMult(nn.Module):
@@ -257,37 +258,103 @@ def evaluate(model: RGCNDistMultModel,
             edge_index: torch.Tensor,
             edge_type: torch.Tensor,
             test_triples: torch.Tensor,
+            all_triples: torch.Tensor,
             device: torch.device,
             batch_size: int = 1024) -> Dict[str, float]:
-    """Evaluate model on test set."""
+    """
+    Evaluate model on test set with MRR and Hit@10 metrics.
+    
+    Args:
+        model: Trained model
+        edge_index: Graph edge indices
+        edge_type: Graph edge types
+        test_triples: Test triples to evaluate
+        all_triples: All triples in the dataset (for filtering)
+        device: Device
+        batch_size: Batch size for evaluation
+    
+    Returns:
+        Dictionary with accuracy, MRR, and Hit@10 metrics
+    """
     model.eval()
     
-    # Generate negative samples for evaluation
-    neg_triples = generate_negative_samples(test_triples, 
-                                            model.num_nodes, 
-                                            num_negatives=10)
+    # Encode all nodes once
+    node_emb = model.encode(edge_index, edge_type)
     
-    all_triples = torch.cat([test_triples, neg_triples], dim=0)
-    labels = torch.cat([
-        torch.ones(len(test_triples)),
-        torch.zeros(len(neg_triples))
-    ])
+    # Convert all_triples to a set for fast lookup
+    all_triples_set = set(map(tuple, all_triples.tolist()))
     
-    all_scores = []
-    for i in range(0, len(all_triples), batch_size):
-        batch_triples = all_triples[i:i+batch_size].to(device)
+    mrr_sum = 0.0
+    hits_at_10 = 0
+    num_samples = 0
+    
+    all_predictions = []
+    all_labels = []
+    
+    print("Computing rankings for MRR and Hit@10...")
+    
+    for i in range(0, len(test_triples), batch_size):
+        batch = test_triples[i:i+batch_size]
+        
+        for triple in batch:
+            head, rel, tail = triple[0].item(), triple[1].item(), triple[2].item()
+            
+            # --- Evaluate tail prediction (h, r, ?) ---
+            # Score all possible tails
+            head_emb = node_emb[head].unsqueeze(0).expand(model.num_nodes, -1)
+            tail_emb = node_emb  # All nodes as potential tails
+            rel_emb = model.decoder.relation_embeddings[rel].unsqueeze(0).expand(model.num_nodes, -1)
+            
+            scores = torch.sum(head_emb * rel_emb * tail_emb, dim=1)
+            
+            # Filter out other true triples (filtered ranking)
+            for j in range(model.num_nodes):
+                if j != tail and (head, rel, j) in all_triples_set:
+                    scores[j] = float('-inf')
+            
+            # Get rank of true tail
+            sorted_indices = torch.argsort(scores, descending=True)
+            rank = (sorted_indices == tail).nonzero(as_tuple=True)[0].item() + 1
+            
+            mrr_sum += 1.0 / rank
+            if rank <= 10:
+                hits_at_10 += 1
+            num_samples += 1
+            
+            # For accuracy calculation
+            all_predictions.append(scores[tail].item())
+            all_labels.append(1.0)
+        
+        if (i // batch_size + 1) % 10 == 0:
+            print(f"  Processed {min(i+batch_size, len(test_triples))}/{len(test_triples)} test triples")
+    
+    # Generate negative samples for accuracy
+    neg_triples = generate_negative_samples(test_triples, model.num_nodes, num_negatives=5)
+    
+    for i in range(0, len(neg_triples), batch_size):
+        batch_triples = neg_triples[i:i+batch_size].to(device)
         scores = model(edge_index, edge_type,
                       batch_triples[:, 0],
                       batch_triples[:, 2],
                       batch_triples[:, 1])
-        all_scores.append(scores.cpu())
+        all_predictions.extend(scores.cpu().tolist())
+        all_labels.extend([0.0] * len(scores))
     
-    all_scores = torch.cat(all_scores)
-    predictions = (torch.sigmoid(all_scores) > 0.5).float()
+    # Calculate accuracy
+    all_predictions = torch.tensor(all_predictions)
+    all_labels = torch.tensor(all_labels)
+    predictions = (torch.sigmoid(all_predictions) > 0.5).float()
+    accuracy = (predictions == all_labels).float().mean().item()
     
-    accuracy = (predictions == labels).float().mean().item()
+    # Calculate final metrics
+    mrr = mrr_sum / num_samples
+    hit_at_10 = hits_at_10 / num_samples
     
-    return {'accuracy': accuracy}
+    return {
+        'accuracy': accuracy,
+        'mrr': mrr,
+        'hit@10': hit_at_10
+    }
 
 
 def explain_triples(model: RGCNDistMultModel,
@@ -385,72 +452,160 @@ def explain_triples(model: RGCNDistMultModel,
 
 def main():
     """Main training and explanation pipeline."""
+    # Argument parser
+    parser = argparse.ArgumentParser(description='Knowledge Graph RGCN-DistMult Training')
+    
+    # Model hyperparameters
+    parser.add_argument('--embedding_dim', type=int, default=128,
+                       help='Dimension of entity and relation embeddings')
+    parser.add_argument('--num_layers', type=int, default=2,
+                       help='Number of RGCN layers')
+    parser.add_argument('--num_bases', type=int, default=30,
+                       help='Number of bases for RGCN')
+    parser.add_argument('--dropout', type=float, default=0.2,
+                       help='Dropout rate')
+    
+    # Training hyperparameters
+    parser.add_argument('--learning_rate', type=float, default=0.01,
+                       help='Learning rate')
+    parser.add_argument('--num_epochs', type=int, default=100,
+                       help='Number of training epochs')
+    parser.add_argument('--batch_size', type=int, default=1024,
+                       help='Batch size for training')
+    parser.add_argument('--num_negatives', type=int, default=5,
+                       help='Number of negative samples per positive sample')
+    parser.add_argument('--val_frequency', type=int, default=10,
+                       help='Frequency (in epochs) to run validation')
+    
+    # Data paths
+    parser.add_argument('--node_dict', type=str, default='node_dict.txt',
+                       help='Path to node dictionary file')
+    parser.add_argument('--rel_dict', type=str, default='rel_dict.txt',
+                       help='Path to relation dictionary file')
+    parser.add_argument('--train_file', type=str, default='robo_train.txt',
+                       help='Path to training triples file')
+    parser.add_argument('--val_file', type=str, default='robo_val.txt',
+                       help='Path to validation triples file')
+    parser.add_argument('--test_file', type=str, default='robo_test.txt',
+                       help='Path to test triples file')
+    
+    # Explanation parameters
+    parser.add_argument('--num_explain', type=int, default=10,
+                       help='Number of test triples to explain')
+    parser.add_argument('--skip_explanation', action='store_true',
+                       help='Skip explanation generation')
+    
+    # Output paths
+    parser.add_argument('--model_save_path', type=str, default='best_model.pt',
+                       help='Path to save best model')
+    parser.add_argument('--explanation_save_path', type=str, default='explanations.pkl',
+                       help='Path to save explanations')
+    
+    args = parser.parse_args()
+    
     # Configuration
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    embedding_dim = 128
-    num_layers = 2
-    num_bases = 30
-    learning_rate = 0.01
-    num_epochs = 100
-    batch_size = 1024
+    print(f"Using device: {device}")
+    print(f"\nHyperparameters:")
+    for arg, value in vars(args).items():
+        print(f"  {arg}: {value}")
     
+    print("\n" + "="*50)
     print("Loading data...")
-    data_loader = KGDataLoader('node_dict.txt', 'rel_dict.txt')
+    print("="*50)
+    data_loader = KGDataLoader(args.node_dict, args.rel_dict)
     
-    train_triples = data_loader.load_triples('robo_train.txt')
-    val_triples = data_loader.load_triples('robo_val.txt')
-    test_triples = data_loader.load_triples('robo_test.txt')
+    train_triples = data_loader.load_triples(args.train_file)
+    val_triples = data_loader.load_triples(args.val_file)
+    test_triples = data_loader.load_triples(args.test_file)
     
     print(f"Loaded {len(train_triples)} train, {len(val_triples)} val, {len(test_triples)} test triples")
     print(f"Num nodes: {data_loader.num_nodes}, Num relations: {data_loader.num_relations}")
+    
+    # All triples for filtered ranking
+    all_triples = torch.cat([train_triples, val_triples, test_triples], dim=0)
     
     # Create graph structure from training data
     edge_index, edge_type = data_loader.create_pyg_data(train_triples)
     edge_index = edge_index.to(device)
     edge_type = edge_type.to(device)
     
+    print("\n" + "="*50)
     print("Initializing model...")
+    print("="*50)
     model = RGCNDistMultModel(
         num_nodes=data_loader.num_nodes,
         num_relations=data_loader.num_relations,
-        embedding_dim=embedding_dim,
-        num_layers=num_layers,
-        num_bases=num_bases
+        embedding_dim=args.embedding_dim,
+        num_layers=args.num_layers,
+        num_bases=args.num_bases,
+        dropout=args.dropout
     ).to(device)
     
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"Total parameters: {total_params:,}")
     
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
+    
+    print("\n" + "="*50)
     print("Training...")
-    best_val_acc = 0
-    for epoch in range(num_epochs):
+    print("="*50)
+    best_val_mrr = 0
+    for epoch in range(args.num_epochs):
         loss = train_epoch(model, edge_index, edge_type, train_triples,
-                          optimizer, device, batch_size=batch_size)
+                          optimizer, device, num_negatives=args.num_negatives,
+                          batch_size=args.batch_size)
         
-        if (epoch + 1) % 10 == 0:
+        print(f"Epoch {epoch+1}/{args.num_epochs}, Loss: {loss:.4f}")
+        
+        if (epoch + 1) % args.val_frequency == 0:
+            print(f"\n--- Validation at Epoch {epoch+1} ---")
             val_metrics = evaluate(model, edge_index, edge_type, 
-                                  val_triples, device)
-            print(f"Epoch {epoch+1}/{num_epochs}, Loss: {loss:.4f}, "
-                  f"Val Acc: {val_metrics['accuracy']:.4f}")
+                                  val_triples, all_triples, device,
+                                  batch_size=args.batch_size)
+            print(f"Val Accuracy: {val_metrics['accuracy']:.4f}")
+            print(f"Val MRR: {val_metrics['mrr']:.4f}")
+            print(f"Val Hit@10: {val_metrics['hit@10']:.4f}")
+            print("-" * 35 + "\n")
             
-            if val_metrics['accuracy'] > best_val_acc:
-                best_val_acc = val_metrics['accuracy']
-                torch.save(model.state_dict(), 'best_model.pt')
+            if val_metrics['mrr'] > best_val_mrr:
+                best_val_mrr = val_metrics['mrr']
+                torch.save(model.state_dict(), args.model_save_path)
+                print(f"✓ Saved best model with MRR: {best_val_mrr:.4f}\n")
     
-    print("\nEvaluating on test set...")
-    model.load_state_dict(torch.load('best_model.pt'))
-    test_metrics = evaluate(model, edge_index, edge_type, test_triples, device)
+    print("\n" + "="*50)
+    print("Evaluating on test set...")
+    print("="*50)
+    model.load_state_dict(torch.load(args.model_save_path))
+    test_metrics = evaluate(model, edge_index, edge_type, test_triples, 
+                           all_triples, device, batch_size=args.batch_size)
+    
+    print("\n" + "="*50)
+    print("FINAL TEST RESULTS")
+    print("="*50)
     print(f"Test Accuracy: {test_metrics['accuracy']:.4f}")
+    print(f"Test MRR:      {test_metrics['mrr']:.4f}")
+    print(f"Test Hit@10:   {test_metrics['hit@10']:.4f}")
+    print("="*50)
     
-    print("\nGenerating explanations...")
-    explanations = explain_triples(model, edge_index, edge_type, 
-                                   test_triples, device, num_samples=10)
+    if not args.skip_explanation:
+        print("\n" + "="*50)
+        print("Generating explanations...")
+        print("="*50)
+        explanations = explain_triples(model, edge_index, edge_type, 
+                                       test_triples, device, 
+                                       num_samples=args.num_explain)
+        
+        # Save explanations
+        with open(args.explanation_save_path, 'wb') as f:
+            pickle.dump(explanations, f)
+        
+        print(f"Generated {len(explanations)} explanations")
+        print(f"Explanations saved to {args.explanation_save_path}")
     
-    # Save explanations
-    with open('explanations.pkl', 'wb') as f:
-        pickle.dump(explanations, f)
-    
-    print(f"Generated {len(explanations)} explanations")
-    print("Explanations saved to explanations.pkl")
+    print("\n" + "="*50)
+    print("Training completed!")
+    print("="*50)
 
 
 if __name__ == '__main__':

@@ -264,7 +264,9 @@ def evaluate(model: RGCNDistMultModel,
             test_triples: torch.Tensor,
             all_triples: torch.Tensor,
             device: torch.device,
-            batch_size: int = 1024) -> Dict[str, float]:
+            batch_size: int = 1024,
+            compute_mrr: bool = True,
+            compute_hits: bool = True) -> Dict[str, float]:
     """
     Evaluate model on test set with MRR and Hit@10 metrics.
     Optimized with batch ranking, smart filtering, and count-based ranking.
@@ -277,96 +279,33 @@ def evaluate(model: RGCNDistMultModel,
         all_triples: All triples in the dataset (for filtering)
         device: Device
         batch_size: Batch size for evaluation
+        compute_mrr: Whether to compute MRR metric
+        compute_hits: Whether to compute Hit@10 metric
     
     Returns:
-        Dictionary with accuracy, MRR, and Hit@10 metrics
+        Dictionary with accuracy, and optionally MRR and Hit@10 metrics
     """
     model.eval()
     
-    print("Computing node embeddings...")
-    # Encode all nodes once
-    node_emb = model.encode(edge_index, edge_type)
-    
-    print("Building filtered candidate sets...")
-    # Pre-compute filtered candidates for each (head, rel) pair
-    # This is a one-time O(num_triples) operation
-    from collections import defaultdict
-    invalid_tails = defaultdict(set)
-    invalid_heads = defaultdict(set)
-    
-    for triple in all_triples:
-        h, r, t = triple[0].item(), triple[1].item(), triple[2].item()
-        invalid_tails[(h, r)].add(t)
-        invalid_heads[(t, r)].add(h)
-    
-    print("Computing rankings for MRR and Hit@10...")
-    
-    mrr_sum = 0.0
-    hits_at_10 = 0
-    num_samples = 0
-    
+    results = {}
     all_predictions = []
     all_labels = []
     
-    # Process test triples in batches
-    num_batches = (len(test_triples) + batch_size - 1) // batch_size
+    # Always compute accuracy with negative samples
+    print("Computing accuracy metric...")
     
-    for batch_idx in range(num_batches):
-        start_idx = batch_idx * batch_size
-        end_idx = min(start_idx + batch_size, len(test_triples))
-        batch = test_triples[start_idx:end_idx]
-        current_batch_size = len(batch)
-        
-        # Extract batch components
-        batch_heads = batch[:, 0]
-        batch_rels = batch[:, 1]
-        batch_tails = batch[:, 2]
-        
-        # --- Tail Prediction: (h, r, ?) ---
-        # Score all possible tails for all triples in batch simultaneously
-        # Shape: (batch_size, num_nodes)
-        head_emb_expanded = node_emb[batch_heads]  # (batch_size, embed_dim)
-        rel_emb_expanded = model.decoder.relation_embeddings[batch_rels]  # (batch_size, embed_dim)
-        
-        # Compute scores for all possible tails
-        # (batch_size, embed_dim) * (batch_size, embed_dim) -> (batch_size, embed_dim)
-        hr_product = head_emb_expanded * rel_emb_expanded
-        
-        # Score all tails: (batch_size, embed_dim) @ (embed_dim, num_nodes) -> (batch_size, num_nodes)
-        all_tail_scores = torch.matmul(hr_product, node_emb.t())
-        
-        # Apply filtering: set invalid candidates to -inf
-        for i in range(current_batch_size):
-            h = batch_heads[i].item()
-            r = batch_rels[i].item()
-            t = batch_tails[i].item()
-            
-            # Get invalid tails for this (h, r) pair
-            invalid_set = invalid_tails.get((h, r), set())
-            
-            # Mask out all invalid tails except the true one
-            for invalid_t in invalid_set:
-                if invalid_t != t:
-                    all_tail_scores[i, invalid_t] = float('-inf')
-        
-        # Count-based ranking (faster than sorting)
-        true_tail_scores = all_tail_scores[torch.arange(current_batch_size), batch_tails]
-        
-        # For each triple, count how many scores are strictly greater than the true tail score
-        # ranks shape: (batch_size,)
-        ranks = (all_tail_scores > true_tail_scores.unsqueeze(1)).sum(dim=1) + 1
-        
-        # Accumulate metrics
-        mrr_sum += (1.0 / ranks.float()).sum().item()
-        hits_at_10 += (ranks <= 10).sum().item()
-        num_samples += current_batch_size
-        
-        # Store predictions for accuracy calculation
-        all_predictions.extend(true_tail_scores.cpu().tolist())
-        all_labels.extend([1.0] * current_batch_size)
-        
-        if (batch_idx + 1) % 10 == 0 or batch_idx == num_batches - 1:
-            print(f"  Processed {end_idx}/{len(test_triples)} test triples")
+    # Encode all nodes once
+    node_emb = model.encode(edge_index, edge_type)
+    
+    # Score positive samples
+    for i in range(0, len(test_triples), batch_size):
+        batch_triples = test_triples[i:i+batch_size].to(device)
+        scores = model(edge_index, edge_type,
+                      batch_triples[:, 0],
+                      batch_triples[:, 2],
+                      batch_triples[:, 1])
+        all_predictions.extend(scores.cpu().tolist())
+        all_labels.extend([1.0] * len(scores))
     
     # Generate negative samples for accuracy
     print("Generating negative samples for accuracy metric...")
@@ -382,20 +321,91 @@ def evaluate(model: RGCNDistMultModel,
         all_labels.extend([0.0] * len(scores))
     
     # Calculate accuracy
-    all_predictions = torch.tensor(all_predictions)
-    all_labels = torch.tensor(all_labels)
-    predictions = (torch.sigmoid(all_predictions) > 0.5).float()
-    accuracy = (predictions == all_labels).float().mean().item()
+    all_predictions_tensor = torch.tensor(all_predictions)
+    all_labels_tensor = torch.tensor(all_labels)
+    predictions = (torch.sigmoid(all_predictions_tensor) > 0.5).float()
+    accuracy = (predictions == all_labels_tensor).float().mean().item()
+    results['accuracy'] = accuracy
     
-    # Calculate final metrics
-    mrr = mrr_sum / num_samples
-    hit_at_10 = hits_at_10 / num_samples
+    # Compute MRR and/or Hit@10 if requested
+    if compute_mrr or compute_hits:
+        print(f"Computing ranking metrics (MRR: {compute_mrr}, Hit@10: {compute_hits})...")
+        
+        print("Building filtered candidate sets...")
+        # Pre-compute filtered candidates for each (head, rel) pair
+        from collections import defaultdict
+        invalid_tails = defaultdict(set)
+        
+        for triple in all_triples:
+            h, r, t = triple[0].item(), triple[1].item(), triple[2].item()
+            invalid_tails[(h, r)].add(t)
+        
+        print("Computing rankings...")
+        
+        mrr_sum = 0.0
+        hits_at_10 = 0
+        num_samples = 0
+        
+        # Process test triples in batches
+        num_batches = (len(test_triples) + batch_size - 1) // batch_size
+        
+        for batch_idx in range(num_batches):
+            start_idx = batch_idx * batch_size
+            end_idx = min(start_idx + batch_size, len(test_triples))
+            batch = test_triples[start_idx:end_idx]
+            current_batch_size = len(batch)
+            
+            # Extract batch components
+            batch_heads = batch[:, 0]
+            batch_rels = batch[:, 1]
+            batch_tails = batch[:, 2]
+            
+            # --- Tail Prediction: (h, r, ?) ---
+            # Score all possible tails for all triples in batch simultaneously
+            head_emb_expanded = node_emb[batch_heads]
+            rel_emb_expanded = model.decoder.relation_embeddings[batch_rels]
+            
+            # Compute scores for all possible tails
+            hr_product = head_emb_expanded * rel_emb_expanded
+            all_tail_scores = torch.matmul(hr_product, node_emb.t())
+            
+            # Apply filtering: set invalid candidates to -inf
+            for i in range(current_batch_size):
+                h = batch_heads[i].item()
+                r = batch_rels[i].item()
+                t = batch_tails[i].item()
+                
+                # Get invalid tails for this (h, r) pair
+                invalid_set = invalid_tails.get((h, r), set())
+                
+                # Mask out all invalid tails except the true one
+                for invalid_t in invalid_set:
+                    if invalid_t != t:
+                        all_tail_scores[i, invalid_t] = float('-inf')
+            
+            # Count-based ranking (faster than sorting)
+            true_tail_scores = all_tail_scores[torch.arange(current_batch_size), batch_tails]
+            
+            # For each triple, count how many scores are strictly greater
+            ranks = (all_tail_scores > true_tail_scores.unsqueeze(1)).sum(dim=1) + 1
+            
+            # Accumulate metrics
+            if compute_mrr:
+                mrr_sum += (1.0 / ranks.float()).sum().item()
+            if compute_hits:
+                hits_at_10 += (ranks <= 10).sum().item()
+            num_samples += current_batch_size
+            
+            if (batch_idx + 1) % 10 == 0 or batch_idx == num_batches - 1:
+                print(f"  Processed {end_idx}/{len(test_triples)} test triples")
+        
+        # Calculate final metrics
+        if compute_mrr:
+            results['mrr'] = mrr_sum / num_samples
+        if compute_hits:
+            results['hit@10'] = hits_at_10 / num_samples
     
-    return {
-        'accuracy': accuracy,
-        'mrr': mrr,
-        'hit@10': hit_at_10
-    }
+    return results
 
 
 def visualize_explanation(explanation_data: Dict,
@@ -725,10 +735,20 @@ def main():
     parser.add_argument('--val_frequency', type=int, default=10,
                        help='Frequency (in epochs) to run validation')
     
+    # Evaluation metrics
+    parser.add_argument('--compute_mrr', action='store_true', default=True,
+                       help='Compute MRR metric during evaluation')
+    parser.add_argument('--no_mrr', action='store_false', dest='compute_mrr',
+                       help='Skip MRR computation')
+    parser.add_argument('--compute_hits', action='store_true', default=True,
+                       help='Compute Hit@10 metric during evaluation')
+    parser.add_argument('--no_hits', action='store_false', dest='compute_hits',
+                       help='Skip Hit@10 computation')
+    
     # Data paths
-    parser.add_argument('--node_dict', type=str, default='node_dict',
+    parser.add_argument('--node_dict', type=str, default='node_dict.txt',
                        help='Path to node dictionary file')
-    parser.add_argument('--rel_dict', type=str, default='rel_dict',
+    parser.add_argument('--rel_dict', type=str, default='rel_dict.txt',
                        help='Path to relation dictionary file')
     parser.add_argument('--train_file', type=str, default='robo_train.txt',
                        help='Path to training triples file')
@@ -814,30 +834,44 @@ def main():
             print(f"\n--- Validation at Epoch {epoch+1} ---")
             val_metrics = evaluate(model, edge_index, edge_type, 
                                   val_triples, all_triples, device,
-                                  batch_size=args.batch_size)
+                                  batch_size=args.batch_size,
+                                  compute_mrr=args.compute_mrr,
+                                  compute_hits=args.compute_hits)
             print(f"Val Accuracy: {val_metrics['accuracy']:.4f}")
-            print(f"Val MRR: {val_metrics['mrr']:.4f}")
-            print(f"Val Hit@10: {val_metrics['hit@10']:.4f}")
+            if 'mrr' in val_metrics:
+                print(f"Val MRR: {val_metrics['mrr']:.4f}")
+            if 'hit@10' in val_metrics:
+                print(f"Val Hit@10: {val_metrics['hit@10']:.4f}")
             print("-" * 35 + "\n")
             
-            if val_metrics['mrr'] > best_val_mrr:
+            # Save best model based on available metrics
+            if 'mrr' in val_metrics and val_metrics['mrr'] > best_val_mrr:
                 best_val_mrr = val_metrics['mrr']
                 torch.save(model.state_dict(), args.model_save_path)
                 print(f"✓ Saved best model with MRR: {best_val_mrr:.4f}\n")
+            elif 'mrr' not in val_metrics and val_metrics['accuracy'] > best_val_mrr:
+                # Fall back to accuracy if MRR not computed
+                best_val_mrr = val_metrics['accuracy']
+                torch.save(model.state_dict(), args.model_save_path)
+                print(f"✓ Saved best model with Accuracy: {best_val_mrr:.4f}\n")
     
     print("\n" + "="*50)
     print("Evaluating on test set...")
     print("="*50)
     model.load_state_dict(torch.load(args.model_save_path))
     test_metrics = evaluate(model, edge_index, edge_type, test_triples, 
-                           all_triples, device, batch_size=args.batch_size)
+                           all_triples, device, batch_size=args.batch_size,
+                           compute_mrr=args.compute_mrr,
+                           compute_hits=args.compute_hits)
     
     print("\n" + "="*50)
     print("FINAL TEST RESULTS")
     print("="*50)
     print(f"Test Accuracy: {test_metrics['accuracy']:.4f}")
-    print(f"Test MRR:      {test_metrics['mrr']:.4f}")
-    print(f"Test Hit@10:   {test_metrics['hit@10']:.4f}")
+    if 'mrr' in test_metrics:
+        print(f"Test MRR:      {test_metrics['mrr']:.4f}")
+    if 'hit@10' in test_metrics:
+        print(f"Test Hit@10:   {test_metrics['hit@10']:.4f}")
     print("="*50)
     
     if not args.skip_explanation:

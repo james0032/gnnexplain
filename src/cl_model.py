@@ -4,10 +4,14 @@ import torch.nn.functional as F
 from torch_geometric.nn import RGCNConv
 from torch_geometric.data import Data
 from torch_geometric.explain import Explainer, GNNExplainer
+from torch_geometric.utils import k_hop_subgraph
 import numpy as np
 from typing import Dict, Tuple, List
 import pickle
 import argparse
+import matplotlib.pyplot as plt
+import networkx as nx
+import os
 
 
 class DistMult(nn.Module):
@@ -263,6 +267,7 @@ def evaluate(model: RGCNDistMultModel,
             batch_size: int = 1024) -> Dict[str, float]:
     """
     Evaluate model on test set with MRR and Hit@10 metrics.
+    Optimized with batch ranking, smart filtering, and count-based ranking.
     
     Args:
         model: Trained model
@@ -278,11 +283,23 @@ def evaluate(model: RGCNDistMultModel,
     """
     model.eval()
     
+    print("Computing node embeddings...")
     # Encode all nodes once
     node_emb = model.encode(edge_index, edge_type)
     
-    # Convert all_triples to a set for fast lookup
-    all_triples_set = set(map(tuple, all_triples.tolist()))
+    print("Building filtered candidate sets...")
+    # Pre-compute filtered candidates for each (head, rel) pair
+    # This is a one-time O(num_triples) operation
+    from collections import defaultdict
+    invalid_tails = defaultdict(set)
+    invalid_heads = defaultdict(set)
+    
+    for triple in all_triples:
+        h, r, t = triple[0].item(), triple[1].item(), triple[2].item()
+        invalid_tails[(h, r)].add(t)
+        invalid_heads[(t, r)].add(h)
+    
+    print("Computing rankings for MRR and Hit@10...")
     
     mrr_sum = 0.0
     hits_at_10 = 0
@@ -291,44 +308,68 @@ def evaluate(model: RGCNDistMultModel,
     all_predictions = []
     all_labels = []
     
-    print("Computing rankings for MRR and Hit@10...")
+    # Process test triples in batches
+    num_batches = (len(test_triples) + batch_size - 1) // batch_size
     
-    for i in range(0, len(test_triples), batch_size):
-        batch = test_triples[i:i+batch_size]
+    for batch_idx in range(num_batches):
+        start_idx = batch_idx * batch_size
+        end_idx = min(start_idx + batch_size, len(test_triples))
+        batch = test_triples[start_idx:end_idx]
+        current_batch_size = len(batch)
         
-        for triple in batch:
-            head, rel, tail = triple[0].item(), triple[1].item(), triple[2].item()
-            
-            # --- Evaluate tail prediction (h, r, ?) ---
-            # Score all possible tails
-            head_emb = node_emb[head].unsqueeze(0).expand(model.num_nodes, -1)
-            tail_emb = node_emb  # All nodes as potential tails
-            rel_emb = model.decoder.relation_embeddings[rel].unsqueeze(0).expand(model.num_nodes, -1)
-            
-            scores = torch.sum(head_emb * rel_emb * tail_emb, dim=1)
-            
-            # Filter out other true triples (filtered ranking)
-            for j in range(model.num_nodes):
-                if j != tail and (head, rel, j) in all_triples_set:
-                    scores[j] = float('-inf')
-            
-            # Get rank of true tail
-            sorted_indices = torch.argsort(scores, descending=True)
-            rank = (sorted_indices == tail).nonzero(as_tuple=True)[0].item() + 1
-            
-            mrr_sum += 1.0 / rank
-            if rank <= 10:
-                hits_at_10 += 1
-            num_samples += 1
-            
-            # For accuracy calculation
-            all_predictions.append(scores[tail].item())
-            all_labels.append(1.0)
+        # Extract batch components
+        batch_heads = batch[:, 0]
+        batch_rels = batch[:, 1]
+        batch_tails = batch[:, 2]
         
-        if (i // batch_size + 1) % 10 == 0:
-            print(f"  Processed {min(i+batch_size, len(test_triples))}/{len(test_triples)} test triples")
+        # --- Tail Prediction: (h, r, ?) ---
+        # Score all possible tails for all triples in batch simultaneously
+        # Shape: (batch_size, num_nodes)
+        head_emb_expanded = node_emb[batch_heads]  # (batch_size, embed_dim)
+        rel_emb_expanded = model.decoder.relation_embeddings[batch_rels]  # (batch_size, embed_dim)
+        
+        # Compute scores for all possible tails
+        # (batch_size, embed_dim) * (batch_size, embed_dim) -> (batch_size, embed_dim)
+        hr_product = head_emb_expanded * rel_emb_expanded
+        
+        # Score all tails: (batch_size, embed_dim) @ (embed_dim, num_nodes) -> (batch_size, num_nodes)
+        all_tail_scores = torch.matmul(hr_product, node_emb.t())
+        
+        # Apply filtering: set invalid candidates to -inf
+        for i in range(current_batch_size):
+            h = batch_heads[i].item()
+            r = batch_rels[i].item()
+            t = batch_tails[i].item()
+            
+            # Get invalid tails for this (h, r) pair
+            invalid_set = invalid_tails.get((h, r), set())
+            
+            # Mask out all invalid tails except the true one
+            for invalid_t in invalid_set:
+                if invalid_t != t:
+                    all_tail_scores[i, invalid_t] = float('-inf')
+        
+        # Count-based ranking (faster than sorting)
+        true_tail_scores = all_tail_scores[torch.arange(current_batch_size), batch_tails]
+        
+        # For each triple, count how many scores are strictly greater than the true tail score
+        # ranks shape: (batch_size,)
+        ranks = (all_tail_scores > true_tail_scores.unsqueeze(1)).sum(dim=1) + 1
+        
+        # Accumulate metrics
+        mrr_sum += (1.0 / ranks.float()).sum().item()
+        hits_at_10 += (ranks <= 10).sum().item()
+        num_samples += current_batch_size
+        
+        # Store predictions for accuracy calculation
+        all_predictions.extend(true_tail_scores.cpu().tolist())
+        all_labels.extend([1.0] * current_batch_size)
+        
+        if (batch_idx + 1) % 10 == 0 or batch_idx == num_batches - 1:
+            print(f"  Processed {end_idx}/{len(test_triples)} test triples")
     
     # Generate negative samples for accuracy
+    print("Generating negative samples for accuracy metric...")
     neg_triples = generate_negative_samples(test_triples, model.num_nodes, num_negatives=5)
     
     for i in range(0, len(neg_triples), batch_size):
@@ -357,27 +398,215 @@ def evaluate(model: RGCNDistMultModel,
     }
 
 
+def visualize_explanation(explanation_data: Dict,
+                         edge_index: torch.Tensor,
+                         edge_type: torch.Tensor,
+                         node_dict: Dict[str, int],
+                         rel_dict: Dict[str, int],
+                         save_path: str,
+                         k_hops: int = 2):
+    """
+    Visualize explanation subgraph and save as figure.
+    
+    Args:
+        explanation_data: Dictionary containing triple and masks
+        edge_index: Full graph edge indices
+        edge_type: Full graph edge types
+        node_dict: Node to index mapping
+        rel_dict: Relation to index mapping
+        save_path: Path to save the figure
+        k_hops: Number of hops for subgraph extraction
+    """
+    triple = explanation_data['triple']
+    edge_mask = explanation_data.get('edge_mask')
+    
+    head_idx, rel_idx, tail_idx = triple
+    
+    # Reverse dictionaries for labels
+    idx_to_node = {v: k for k, v in node_dict.items()}
+    idx_to_rel = {v: k for k, v in rel_dict.items()}
+    
+    # Extract k-hop subgraph around head and tail
+    nodes_of_interest = torch.tensor([head_idx, tail_idx])
+    subset, sub_edge_index, mapping, edge_mask_sub = k_hop_subgraph(
+        nodes_of_interest,
+        k_hops,
+        edge_index,
+        relabel_nodes=True,
+        num_nodes=edge_index.max().item() + 1
+    )
+    
+    # Get edge types for subgraph
+    sub_edge_type = edge_type[edge_mask_sub]
+    
+    # Get explanation scores for subgraph edges if available
+    if edge_mask is not None:
+        explanation_scores = edge_mask[edge_mask_sub].cpu().numpy()
+    else:
+        explanation_scores = np.ones(sub_edge_index.shape[1])
+    
+    # Normalize scores for visualization
+    if explanation_scores.max() > explanation_scores.min():
+        explanation_scores = (explanation_scores - explanation_scores.min()) / \
+                           (explanation_scores.max() - explanation_scores.min())
+    
+    # Create NetworkX graph
+    G = nx.DiGraph()
+    
+    # Add nodes
+    for i, node_idx in enumerate(subset.tolist()):
+        node_label = idx_to_node.get(node_idx, f"Node_{node_idx}")
+        # Truncate long labels
+        if len(node_label) > 20:
+            node_label = node_label[:17] + "..."
+        G.add_node(i, label=node_label, original_idx=node_idx)
+    
+    # Add edges with explanation scores
+    edge_colors = []
+    edge_widths = []
+    edge_labels = {}
+    
+    for i in range(sub_edge_index.shape[1]):
+        src = sub_edge_index[0, i].item()
+        dst = sub_edge_index[1, i].item()
+        rel = sub_edge_type[i].item()
+        score = explanation_scores[i]
+        
+        rel_label = idx_to_rel.get(rel, f"Rel_{rel}")
+        if len(rel_label) > 15:
+            rel_label = rel_label[:12] + "..."
+        
+        G.add_edge(src, dst, relation=rel_label, score=score)
+        edge_labels[(src, dst)] = rel_label
+        
+        # Color based on importance
+        edge_colors.append(score)
+        edge_widths.append(1 + score * 3)  # Width from 1 to 4
+    
+    # Create figure
+    fig, ax = plt.subplots(figsize=(16, 12))
+    
+    # Layout
+    pos = nx.spring_layout(G, k=2, iterations=50, seed=42)
+    
+    # Identify target nodes in subgraph
+    head_subgraph_idx = mapping[0].item() if head_idx in subset else None
+    tail_subgraph_idx = mapping[1].item() if tail_idx in subset else None
+    
+    # Draw nodes with different colors for head/tail
+    node_colors = []
+    node_sizes = []
+    for node in G.nodes():
+        if node == head_subgraph_idx:
+            node_colors.append('#FF6B6B')  # Red for head
+            node_sizes.append(2000)
+        elif node == tail_subgraph_idx:
+            node_colors.append('#4ECDC4')  # Cyan for tail
+            node_sizes.append(2000)
+        else:
+            node_colors.append('#95E1D3')  # Light green for others
+            node_sizes.append(1000)
+    
+    # Draw nodes
+    nx.draw_networkx_nodes(G, pos, node_color=node_colors, 
+                          node_size=node_sizes, alpha=0.9, ax=ax)
+    
+    # Draw edges with gradient colors based on importance
+    edges = G.edges()
+    edge_collection = nx.draw_networkx_edges(
+        G, pos, edgelist=edges, edge_color=edge_colors,
+        width=edge_widths, alpha=0.7, edge_cmap=plt.cm.YlOrRd,
+        edge_vmin=0, edge_vmax=1, arrows=True,
+        arrowsize=20, arrowstyle='->', connectionstyle='arc3,rad=0.1',
+        ax=ax
+    )
+    
+    # Draw node labels
+    node_labels_dict = nx.get_node_attributes(G, 'label')
+    nx.draw_networkx_labels(G, pos, node_labels_dict, 
+                           font_size=9, font_weight='bold', ax=ax)
+    
+    # Draw edge labels (relations)
+    nx.draw_networkx_edge_labels(G, pos, edge_labels, 
+                                 font_size=7, font_color='darkblue',
+                                 bbox=dict(boxstyle='round,pad=0.3', 
+                                         facecolor='white', alpha=0.7),
+                                 ax=ax)
+    
+    # Add colorbar for edge importance
+    sm = plt.cm.ScalarMappable(cmap=plt.cm.YlOrRd, 
+                               norm=plt.Normalize(vmin=0, vmax=1))
+    sm.set_array([])
+    cbar = plt.colorbar(sm, ax=ax, fraction=0.046, pad=0.04)
+    cbar.set_label('Edge Importance', rotation=270, labelpad=20, fontsize=12)
+    
+    # Title with triple information
+    head_label = idx_to_node.get(head_idx, f"Node_{head_idx}")
+    tail_label = idx_to_node.get(tail_idx, f"Node_{tail_idx}")
+    rel_label = idx_to_rel.get(rel_idx, f"Rel_{rel_idx}")
+    
+    # Truncate for title
+    if len(head_label) > 25:
+        head_label = head_label[:22] + "..."
+    if len(tail_label) > 25:
+        tail_label = tail_label[:22] + "..."
+    if len(rel_label) > 25:
+        rel_label = rel_label[:22] + "..."
+    
+    title = f"Explanation for Triple: ({head_label}) -[{rel_label}]-> ({tail_label})"
+    ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
+    
+    # Legend
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor='#FF6B6B', label='Head Entity'),
+        Patch(facecolor='#4ECDC4', label='Tail Entity'),
+        Patch(facecolor='#95E1D3', label='Context Nodes')
+    ]
+    ax.legend(handles=legend_elements, loc='upper left', fontsize=10)
+    
+    ax.axis('off')
+    plt.tight_layout()
+    
+    # Save figure
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"  Saved visualization to {save_path}")
+
+
 def explain_triples(model: RGCNDistMultModel,
                    edge_index: torch.Tensor,
                    edge_type: torch.Tensor,
                    test_triples: torch.Tensor,
+                   node_dict: Dict[str, int],
+                   rel_dict: Dict[str, int],
                    device: torch.device,
-                   num_samples: int = 10) -> List[Dict]:
+                   num_samples: int = 10,
+                   save_dir: str = 'explanations',
+                   k_hops: int = 2) -> List[Dict]:
     """
-    Use GNNExplainer to explain test triples.
+    Use GNNExplainer to explain test triples and visualize them.
     
     Args:
         model: Trained model
         edge_index: Graph edge indices
         edge_type: Graph edge types
         test_triples: Test triples to explain
+        node_dict: Node to index mapping
+        rel_dict: Relation to index mapping
         device: Device
         num_samples: Number of test samples to explain
+        save_dir: Directory to save visualizations
+        k_hops: Number of hops for subgraph visualization
     
     Returns:
         List of explanations
     """
     model.eval()
+    
+    # Create save directory
+    os.makedirs(save_dir, exist_ok=True)
     
     # Create a wrapper for GNNExplainer
     class ModelWrapper(nn.Module):
@@ -405,8 +634,12 @@ def explain_triples(model: RGCNDistMultModel,
     # Sample test triples to explain
     sample_indices = torch.randperm(len(test_triples))[:num_samples]
     
-    for idx in sample_indices:
+    print(f"\nGenerating explanations for {num_samples} test triples...")
+    
+    for idx_num, idx in enumerate(sample_indices):
         triple = test_triples[idx].to(device)
+        
+        print(f"\n[{idx_num+1}/{num_samples}] Explaining triple: {triple.cpu().tolist()}")
         
         # Create wrapper
         wrapper = ModelWrapper(model, edge_index, edge_type, triple).to(device)
@@ -439,13 +672,28 @@ def explain_triples(model: RGCNDistMultModel,
                 edge_attr=data.edge_attr
             )
             
-            explanations.append({
+            explanation_data = {
                 'triple': triple.cpu().tolist(),
                 'edge_mask': explanation.edge_mask.cpu() if hasattr(explanation, 'edge_mask') else None,
                 'node_mask': explanation.node_mask.cpu() if hasattr(explanation, 'node_mask') else None,
-            })
+            }
+            
+            explanations.append(explanation_data)
+            
+            # Visualize and save
+            save_path = os.path.join(save_dir, f'explanation_{idx_num+1}.png')
+            visualize_explanation(
+                explanation_data,
+                edge_index.cpu(),
+                edge_type.cpu(),
+                node_dict,
+                rel_dict,
+                save_path,
+                k_hops=k_hops
+            )
+            
         except Exception as e:
-            print(f"Error explaining triple {triple.cpu().tolist()}: {str(e)}")
+            print(f"  Error explaining triple {triple.cpu().tolist()}: {str(e)}")
     
     return explanations
 
@@ -494,12 +742,16 @@ def main():
                        help='Number of test triples to explain')
     parser.add_argument('--skip_explanation', action='store_true',
                        help='Skip explanation generation')
+    parser.add_argument('--explanation_khops', type=int, default=2,
+                       help='Number of hops for explanation subgraph visualization')
     
     # Output paths
     parser.add_argument('--model_save_path', type=str, default='best_model.pt',
                        help='Path to save best model')
     parser.add_argument('--explanation_save_path', type=str, default='explanations.pkl',
                        help='Path to save explanations')
+    parser.add_argument('--explanation_dir', type=str, default='explanations',
+                       help='Directory to save explanation visualizations')
     
     args = parser.parse_args()
     
@@ -592,16 +844,21 @@ def main():
         print("\n" + "="*50)
         print("Generating explanations...")
         print("="*50)
-        explanations = explain_triples(model, edge_index, edge_type, 
-                                       test_triples, device, 
-                                       num_samples=args.num_explain)
+        explanations = explain_triples(
+            model, edge_index, edge_type, 
+            test_triples, data_loader.node_dict, data_loader.rel_dict,
+            device, num_samples=args.num_explain,
+            save_dir=args.explanation_dir,
+            k_hops=args.explanation_khops
+        )
         
         # Save explanations
         with open(args.explanation_save_path, 'wb') as f:
             pickle.dump(explanations, f)
         
-        print(f"Generated {len(explanations)} explanations")
+        print(f"\nGenerated {len(explanations)} explanations")
         print(f"Explanations saved to {args.explanation_save_path}")
+        print(f"Visualizations saved to {args.explanation_dir}/")
     
     print("\n" + "="*50)
     print("Training completed!")

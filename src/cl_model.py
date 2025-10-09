@@ -575,7 +575,7 @@ def visualize_explanation(explanation_data: Dict,
     from matplotlib.patches import Patch
     legend_elements = [
         Patch(facecolor='#FF6B6B', label='Head Entity'),
-        Patch(facecolor='#4ECDC4', label='Tail Entity'),
+        Patch(facecolor='#FF6B6B', label='Tail Entity'),
         Patch(facecolor='#95E1D3', label='Context Nodes')
     ]
     ax.legend(handles=legend_elements, loc='upper left', fontsize=10)
@@ -700,7 +700,7 @@ def visualize_simple_explanation(explanation: Dict,
     from matplotlib.patches import Patch
     legend_elements = [
         Patch(facecolor='#FF6B6B', label='Head Entity'),
-        Patch(facecolor='#4ECDC4', label='Tail Entity'),
+        Patch(facecolor='#FF6B6B', label='Tail Entity'),
         Patch(facecolor='#95E1D3', label='Context Nodes')
     ]
     ax.legend(handles=legend_elements, loc='upper left', fontsize=10)

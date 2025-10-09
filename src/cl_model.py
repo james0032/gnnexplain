@@ -12,7 +12,8 @@ import argparse
 import matplotlib.pyplot as plt
 import networkx as nx
 import os
-
+from utils import *
+from triple_filter_prefix import *
 
 class DistMult(nn.Module):
     """DistMult decoder for knowledge graph completion."""
@@ -176,97 +177,6 @@ class KGDataLoader:
         edge_type = triples[:, 1]
         return edge_index, edge_type
 
-def load_edge_map(edge_map_path: str) -> Dict[int, str]:
-    """
-    Load edge mapping from JSON file and extract predicate names.
-    
-    Args:
-        edge_map_path: Path to edge_map.json
-    
-    Returns:
-        Dictionary mapping relation index to predicate name
-    """
-    import json
-    
-    edge_to_predicate = {}
-    
-    try:
-        with open(edge_map_path, 'r') as f:
-            edge_map = json.load(f)
-        
-        # edge_map format: 
-        # {"{\"predicate\": \"biolink:contributes_to\", ...}": "predicate:0", ...}
-        for key_str, value in edge_map.items():
-            try:
-                # Parse the JSON key string
-                key_dict = json.loads(key_str)
-                
-                # Extract the predicate from the key
-                if 'predicate' in key_dict:
-                    predicate_full = key_dict['predicate']
-                    
-                    # Extract just the part after "biolink:" if present
-                    if 'biolink:' in predicate_full:
-                        predicate_name = predicate_full.split('biolink:')[1]
-                    else:
-                        predicate_name = predicate_full
-                    
-                    # Extract the index from "predicate:0" -> 0
-                    if isinstance(value, str) and ':' in value:
-                        idx = int(value.split(':')[1])
-                        edge_to_predicate[idx] = predicate_name
-                    else:
-                        print(f"Warning: Unexpected value format: {value}")
-                        
-            except json.JSONDecodeError as e:
-                print(f"Warning: Could not parse key: {key_str[:50]}... Error: {e}")
-                continue
-            except (ValueError, IndexError) as e:
-                print(f"Warning: Could not extract index from value: {value}. Error: {e}")
-                continue
-    
-    except FileNotFoundError:
-        print(f"Warning: {edge_map_path} not found. Using default relation labels.")
-        return {}
-    except Exception as e:
-        print(f"Warning: Error loading {edge_map_path}: {e}. Using default relation labels.")
-        return {}
-    
-    print(f"Loaded {len(edge_to_predicate)} predicate mappings from {edge_map_path}")
-    
-    return edge_to_predicate
-
-def generate_negative_samples(positive_triples: torch.Tensor, 
-                              num_nodes: int, 
-                              num_negatives: int = 1) -> torch.Tensor:
-    """
-    Generate negative samples by corrupting head or tail entities.
-    
-    Args:
-        positive_triples: Positive triples (num_pos, 3)
-        num_nodes: Total number of nodes
-        num_negatives: Number of negative samples per positive
-    
-    Returns:
-        Negative triples (num_pos * num_negatives, 3)
-    """
-    num_pos = positive_triples.shape[0]
-    negatives = []
-    
-    for _ in range(num_negatives):
-        # Randomly corrupt head or tail
-        corrupted = positive_triples.clone()
-        corrupt_head = torch.rand(num_pos) < 0.5
-        
-        # Corrupt heads
-        corrupted[corrupt_head, 0] = torch.randint(0, num_nodes, 
-                                                    (corrupt_head.sum(),))
-        # Corrupt tails
-        corrupted[~corrupt_head, 2] = torch.randint(0, num_nodes, 
-                                                     ((~corrupt_head).sum(),))
-        negatives.append(corrupted)
-    
-    return torch.cat(negatives, dim=0)
 
 
 def train_epoch(model: RGCNDistMultModel, 
@@ -478,9 +388,13 @@ def visualize_explanation(explanation_data: Dict,
                          rel_dict: Dict[str, int],
                          save_path: str,
                          k_hops: int = 2,
-                         edge_map: Dict[int, str] = None):  
+                         edge_map: Dict[int, str] = None,
+                         top_k_edges: int = 20):  
     """
     Visualize explanation subgraph and save as figure.
+    
+    Args:
+        top_k_edges: Number of most important edges to display (default: 20)
     """
     triple = explanation_data['triple']
     edge_mask = explanation_data.get('edge_mask')
@@ -523,6 +437,49 @@ def visualize_explanation(explanation_data: Dict,
     else:
         explanation_scores = np.ones(sub_edge_index.shape[1])
     
+    # FILTER: Keep only top-K most important edges
+    if len(explanation_scores) > top_k_edges:
+        # Get indices of top-K edges
+        top_k_indices = np.argsort(explanation_scores)[-top_k_edges:]
+        
+        # Filter subgraph to only include top-K edges
+        sub_edge_index = sub_edge_index[:, top_k_indices]
+        sub_edge_type = sub_edge_type[top_k_indices]
+        explanation_scores = explanation_scores[top_k_indices]
+        
+        # Recompute which nodes are actually used
+        used_nodes = torch.unique(sub_edge_index.flatten())
+        
+        # Create mapping from old to new node indices
+        node_mapping = {old_idx.item(): new_idx for new_idx, old_idx in enumerate(used_nodes)}
+        
+        # Update subset to only include used nodes
+        subset = subset[used_nodes]
+        
+        # Remap edge indices
+        sub_edge_index_remapped = torch.zeros_like(sub_edge_index)
+        for i in range(sub_edge_index.shape[1]):
+            sub_edge_index_remapped[0, i] = node_mapping[sub_edge_index[0, i].item()]
+            sub_edge_index_remapped[1, i] = node_mapping[sub_edge_index[1, i].item()]
+        sub_edge_index = sub_edge_index_remapped
+        
+        # Update mapping for head/tail nodes
+        if head_idx in subset:
+            head_subgraph_idx = (subset == head_idx).nonzero(as_tuple=True)[0].item()
+        else:
+            head_subgraph_idx = None
+            
+        if tail_idx in subset:
+            tail_subgraph_idx = (subset == tail_idx).nonzero(as_tuple=True)[0].item()
+        else:
+            tail_subgraph_idx = None
+        
+        print(f"  Filtered to top {top_k_edges} edges (from {len(edge_mask_sub)} total)")
+    else:
+        # Identify target nodes normally
+        head_subgraph_idx = mapping[0].item() if head_idx in subset else None
+        tail_subgraph_idx = mapping[1].item() if tail_idx in subset else None
+    
     # Normalize scores for visualization
     if explanation_scores.max() > explanation_scores.min():
         explanation_scores = (explanation_scores - explanation_scores.min()) / \
@@ -551,7 +508,6 @@ def visualize_explanation(explanation_data: Dict,
         rel = sub_edge_type[i].item()
         score = explanation_scores[i]
         
-        # Use edge_map for relation names
         rel_label = get_relation_name(rel)
         if len(rel_label) > 20:
             rel_label = rel_label[:17] + "..."
@@ -568,10 +524,6 @@ def visualize_explanation(explanation_data: Dict,
     # Layout
     pos = nx.spring_layout(G, k=2, iterations=50, seed=42)
     
-    # Identify target nodes in subgraph
-    head_subgraph_idx = mapping[0].item() if head_idx in subset else None
-    tail_subgraph_idx = mapping[1].item() if tail_idx in subset else None
-    
     # Draw nodes with different colors for head/tail
     node_colors = []
     node_sizes = []
@@ -580,7 +532,7 @@ def visualize_explanation(explanation_data: Dict,
             node_colors.append('#FF6B6B')
             node_sizes.append(2000)
         elif node == tail_subgraph_idx:
-            node_colors.append('#4ECDC4')
+            node_colors.append('#FF9999')
             node_sizes.append(2000)
         else:
             node_colors.append('#95E1D3')
@@ -645,7 +597,7 @@ def visualize_explanation(explanation_data: Dict,
     from matplotlib.patches import Patch
     legend_elements = [
         Patch(facecolor='#FF6B6B', label='Head Entity'),
-        Patch(facecolor='#4ECDC4', label='Tail Entity'),
+        Patch(facecolor='#FF9999', label='Tail Entity'),
         Patch(facecolor='#95E1D3', label='Context Nodes')
     ]
     ax.legend(handles=legend_elements, loc='upper left', fontsize=10)
@@ -658,7 +610,7 @@ def visualize_explanation(explanation_data: Dict,
     plt.close()
     
     print(f"  Saved visualization to {save_path}")
-    
+        
 def visualize_simple_explanation(explanation: Dict,
                                  edge_index: torch.Tensor,
                                  edge_type: torch.Tensor,
@@ -743,7 +695,7 @@ def visualize_simple_explanation(explanation: Dict,
             node_colors.append('#FF6B6B')
             node_sizes.append(2000)
         elif node == tail_subgraph_idx:
-            node_colors.append('#4ECDC4')
+            node_colors.append('#FF9999')
             node_sizes.append(2000)
         else:
             node_colors.append('#95E1D3')
@@ -778,7 +730,7 @@ def visualize_simple_explanation(explanation: Dict,
     from matplotlib.patches import Patch
     legend_elements = [
         Patch(facecolor='#FF6B6B', label='Head Entity'),
-        Patch(facecolor='#4ECDC4', label='Tail Entity'),
+        Patch(facecolor='#FF9999', label='Tail Entity'),
         Patch(facecolor='#95E1D3', label='Context Nodes')
     ]
     ax.legend(handles=legend_elements, loc='upper left', fontsize=10)
@@ -915,7 +867,7 @@ def simple_path_explanation(edge_index: torch.Tensor,
                             node_dict: Dict[str, int],
                             rel_dict: Dict[str, int],
                             k_hops: int = 2,
-                            edge_map: Dict[int, str] = None) -> Dict:  # ✅ NEW PARAMETER
+                            edge_map: Dict[int, str] = None) -> Dict: 
     """
     Simple path-based explanation: find paths connecting head to tail.
     """
@@ -973,7 +925,7 @@ def simple_path_explanation(edge_index: torch.Tensor,
     explanation = {
         'triple': triple.tolist(),
         'head': idx_to_node.get(head_idx, f"Node_{head_idx}"),
-        'relation': get_relation_name(rel_idx),  # ✅ Use readable name
+        'relation': get_relation_name(rel_idx),  # Use readable name
         'tail': idx_to_node.get(tail_idx, f"Node_{tail_idx}"),
         'num_paths_found': len(paths),
         'paths': []
@@ -984,7 +936,7 @@ def simple_path_explanation(edge_index: torch.Tensor,
         for src, dst, rel, _ in path_edges:
             src_name = idx_to_node.get(src, f"Node_{src}")
             dst_name = idx_to_node.get(dst, f"Node_{dst}")
-            rel_name = get_relation_name(rel)  # ✅ Use readable name
+            rel_name = get_relation_name(rel)  # Use readable name
             path_desc.append(f"{src_name} -[{rel_name}]-> {dst_name}")
         
         explanation['paths'].append({
@@ -1009,7 +961,10 @@ def explain_triples(model: RGCNDistMultModel,
                    use_simple_explanation: bool = False,
                    use_perturbation: bool = False,
                    max_edges: int = 2000,
-                   edge_map: Dict[int, str] = None) -> List[Dict]:
+                   edge_map: Dict[int, str] = None,
+                   top_k_edges: int = 20,
+                   subject_prefixes: List[str] = None,  
+                   object_prefixes: List[str] = None) -> List[Dict]:
     """
     Explain test triples using different methods.
     
@@ -1019,6 +974,24 @@ def explain_triples(model: RGCNDistMultModel,
     model.eval()
     os.makedirs(save_dir, exist_ok=True)
     
+    # FILTER: Apply prefix filtering if specified
+    if subject_prefixes and object_prefixes:
+        filtered_test_triples = filter_triples_by_prefix(
+            test_triples,
+            node_dict,
+            subject_prefixes,
+            object_prefixes
+        )
+        
+        if len(filtered_test_triples) == 0:
+            print("⚠️  No triples match the prefix criteria. Skipping explanations.")
+            return []
+        
+        # Use filtered triples for sampling
+        test_triples_to_sample = filtered_test_triples
+    else:
+        test_triples_to_sample = test_triples
+        
     # Analyze graph connectivity
     print("\nAnalyzing graph connectivity...")
     degrees = torch.zeros(model.num_nodes, dtype=torch.long)
@@ -1032,7 +1005,9 @@ def explain_triples(model: RGCNDistMultModel,
     print(f"Average degree: {avg_degree:.2f}")
     
     explanations = []
-    sample_indices = torch.randperm(len(test_triples))[:num_samples]
+    # ✅ SAMPLE: Use filtered triples
+    num_samples = min(num_samples, len(test_triples_to_sample))
+    sample_indices = torch.randperm(len(test_triples_to_sample))[:num_samples]
     
     method = "perturbation-based" if use_perturbation else "path-based"
     print(f"\nGenerating {method} explanations for {num_samples} test triples...")
@@ -1042,9 +1017,16 @@ def explain_triples(model: RGCNDistMultModel,
     skipped = 0  # NEW COUNTER
     
     for idx_num, idx in enumerate(sample_indices):
-        triple = test_triples[idx]
+        triple = test_triples_to_sample[idx]
         
-        print(f"\n[{idx_num+1}/{num_samples}] Explaining triple: {triple.cpu().tolist()}")
+        # Display triple with readable labels
+        idx_to_node = {v: k for k, v in node_dict.items()}
+        head_id = idx_to_node.get(triple[0].item(), f"Node_{triple[0].item()}")
+        tail_id = idx_to_node.get(triple[2].item(), f"Node_{triple[2].item()}")
+        
+        print(f"\n[{idx_num+1}/{num_samples}] Explaining triple:")
+        print(f"  {head_id} -> {tail_id}")
+        print(f"  Indices: {triple.cpu().tolist()}")
         
         try:
             if use_perturbation:
@@ -1059,7 +1041,8 @@ def explain_triples(model: RGCNDistMultModel,
                     device,
                     k_hops=k_hops,
                     max_edges=max_edges,
-                    edge_map=edge_map
+                    edge_map=edge_map,
+                    top_k_edges=top_k_edges
                 )
                 
                 # CHECK: Handle None return (skipped)
@@ -1191,12 +1174,26 @@ def main():
                        help='Skip explanation generation')
     parser.add_argument('--explanation_khops', type=int, default=2,
                        help='Number of hops for explanation subgraph visualization')
+    parser.add_argument('--top_k_edges', type=int, default=20, 
+                   help='Maximum number of edges to display in visualization (keeps most important)')
     parser.add_argument('--use_simple_explanation', action='store_true',
                        help='Use simple path-based explanation instead of GNNExplainer')
     parser.add_argument('--use_perturbation', action='store_true', 
                    help='Use edge perturbation explainer (slower but shows importance scores)')
     parser.add_argument('--max_edges', type=int, default=2000, 
                    help='Maximum edges for perturbation explainer (skip triples with more edges)')
+    
+    # NEW: Prefix filtering
+    parser.add_argument('--subject_prefixes', type=str, nargs='+', 
+                    default=['CHEBI', 'UNII', 'PUBCHEM.COMPOUND'],
+                    help='Subject prefixes to filter (drug nodes)')
+    parser.add_argument('--object_prefixes', type=str, nargs='+',
+                    default=['MONDO'],
+                    help='Object prefixes to filter (disease nodes)')
+    parser.add_argument('--show_prefix_inventory', action='store_true',
+                    help='Show inventory of node prefixes in test set')
+    parser.add_argument('--no_prefix_filter', action='store_true',
+                    help='Disable prefix filtering (use all test triples)')
     
     # Output paths
     parser.add_argument('--model_save_path', type=str, default='best_model.pt',
@@ -1311,6 +1308,19 @@ def main():
         print("\n" + "="*50)
         print("Generating explanations...")
         print("="*50)
+        
+        # Show prefix inventory if requested
+        if args.show_prefix_inventory:
+            print_prefix_inventory(test_triples, data_loader.node_dict, "Test Set")
+        
+        # Determine if we should filter
+        if args.no_prefix_filter:
+            subject_prefixes = None
+            object_prefixes = None
+        else:
+            subject_prefixes = args.subject_prefixes
+            object_prefixes = args.object_prefixes
+            
         explanations = explain_triples(
             model, edge_index, edge_type, 
             test_triples, data_loader.node_dict, data_loader.rel_dict,
@@ -1320,7 +1330,9 @@ def main():
             use_simple_explanation=args.use_simple_explanation,
             use_perturbation=args.use_perturbation,
             max_edges=args.max_edges,
-            edge_map=data_loader.edge_map
+            edge_map=data_loader.edge_map,
+            subject_prefixes=subject_prefixes, 
+            object_prefixes=object_prefixes
         )
         
         # Save explanations

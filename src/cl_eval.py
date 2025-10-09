@@ -495,8 +495,76 @@ def main():
                 )
                 print(f"  ✓ Saved to {save_path}")
             else:
-                print("  ⚠️  GNNExplainer not yet implemented in standalone script")
-                print("     Use --use_path_explanation for now")
+                # Try GNNExplainer (may fail)
+                triple_device = triple.to(device)
+                
+                # Create wrapper
+                class ModelWrapper(nn.Module):
+                    def __init__(self, base_model, edge_index, edge_type, target_triple):
+                        super().__init__()
+                        self.base_model = base_model
+                        self.edge_index = edge_index
+                        self.edge_type = edge_type
+                        self.target_triple = target_triple
+                    
+                    def forward(self, x, edge_index, edge_attr=None):
+                        node_emb = self.base_model.encode(edge_index, edge_attr)
+                        score = self.base_model.decode(
+                            node_emb,
+                            self.target_triple[0:1],
+                            self.target_triple[2:3],
+                            self.target_triple[1:2]
+                        )
+                        return score
+                
+                wrapper = ModelWrapper(model, edge_index, edge_type, triple_device).to(device)
+                
+                explainer = Explainer(
+                    model=wrapper,
+                    algorithm=GNNExplainer(epochs=100),
+                    explanation_type='model',
+                    node_mask_type='attributes',
+                    edge_mask_type='object',
+                    model_config=dict(
+                        mode='regression',
+                        task_level='graph',
+                        return_type='raw',
+                    ),
+                )
+                
+                data = Data(
+                    x=model.node_embeddings.detach(),
+                    edge_index=edge_index,
+                    edge_attr=edge_type
+                ).to(device)
+                
+                explanation = explainer(
+                    x=data.x,
+                    edge_index=data.edge_index,
+                    edge_attr=data.edge_attr
+                )
+                
+                explanation_data = {
+                    'triple': triple.cpu().tolist(),
+                    'edge_mask': explanation.edge_mask.cpu() if hasattr(explanation, 'edge_mask') else None,
+                    'node_mask': explanation.node_mask.cpu() if hasattr(explanation, 'node_mask') else None,
+                }
+                
+                explanations.append(explanation_data)
+                
+                # Visualize
+                save_path = os.path.join(args.output_dir, f'explanation_{idx_num+1}.png')
+                visualize_simple_explanation(
+                    explanation_data,
+                    edge_index.cpu(),
+                    edge_type.cpu(),
+                    node_dict,
+                    rel_dict,
+                    save_path,
+                    k_hops=args.k_hops
+                )
+                print(f"  ✓ Saved to {save_path}")
+                successful += 1
                 
         except Exception as e:
             print(f"  ✗ Error: {str(e)}")

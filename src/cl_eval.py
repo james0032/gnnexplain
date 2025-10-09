@@ -381,9 +381,9 @@ def main():
     # Model and data paths
     parser.add_argument('--model_path', type=str, required=True,
                        help='Path to trained model checkpoint')
-    parser.add_argument('--node_dict', type=str, default='node_dict.txt',
+    parser.add_argument('--node_dict', type=str, default='node_dict',
                        help='Path to node dictionary')
-    parser.add_argument('--rel_dict', type=str, default='rel_dict.txt',
+    parser.add_argument('--rel_dict', type=str, default='rel_dict',
                        help='Path to relation dictionary')
     parser.add_argument('--train_file', type=str, default='robo_train.txt',
                        help='Path to training triples')

@@ -243,6 +243,96 @@ def simple_path_explanation(edge_index: torch.Tensor,
     
     return explanation
 
+def link_prediction_explainer(model, edge_index, edge_type, triple, 
+                              node_dict, rel_dict, k_hops=2):
+    """
+    Custom explainer specifically for link prediction tasks.
+    Uses edge perturbation to find important edges.
+    """
+    from torch_geometric.utils import k_hop_subgraph
+    
+    head_idx, rel_idx, tail_idx = triple
+    
+    # Get original prediction score
+    model.eval()
+    with torch.no_grad():
+        original_score = model(edge_index, edge_type,
+                              triple[0:1], triple[2:3], triple[1:2])
+    
+    # Extract k-hop subgraph around triple
+    nodes_of_interest = torch.tensor([head_idx, tail_idx])
+    subset, sub_edge_index, mapping, edge_mask_sub = k_hop_subgraph(
+        nodes_of_interest,
+        k_hops,
+        edge_index,
+        relabel_nodes=True,
+        num_nodes=edge_index.max().item() + 1
+    )
+    
+    sub_edge_type = edge_type[edge_mask_sub]
+    original_edge_indices = torch.where(edge_mask_sub)[0]
+    
+    # Compute importance by edge removal
+    importance_scores = []
+    
+    print(f"  Testing {len(original_edge_indices)} edges in {k_hops}-hop subgraph...")
+    
+    for i, edge_idx in enumerate(original_edge_indices):
+        # Create mask removing this edge
+        mask = torch.ones(edge_index.shape[1], dtype=torch.bool)
+        mask[edge_idx] = False
+        
+        # Forward pass without this edge
+        with torch.no_grad():
+            masked_edge_index = edge_index[:, mask]
+            masked_edge_type = edge_type[mask]
+            
+            new_score = model(masked_edge_index, masked_edge_type,
+                            triple[0:1], triple[2:3], triple[1:2])
+        
+        # Importance = change in prediction
+        importance = abs(original_score.item() - new_score.item())
+        importance_scores.append(importance)
+    
+    # Normalize scores
+    importance_scores = np.array(importance_scores)
+    if importance_scores.max() > 0:
+        importance_scores = importance_scores / importance_scores.max()
+    
+    # Create explanation dict
+    idx_to_node = {v: k for k, v in node_dict.items()}
+    idx_to_rel = {v: k for k, v in rel_dict.items()}
+    
+    # Sort edges by importance
+    sorted_indices = np.argsort(importance_scores)[::-1]
+    top_k = min(10, len(sorted_indices))
+    
+    important_edges = []
+    for idx in sorted_indices[:top_k]:
+        edge_global_idx = original_edge_indices[idx].item()
+        src = edge_index[0, edge_global_idx].item()
+        dst = edge_index[1, edge_global_idx].item()
+        rel = edge_type[edge_global_idx].item()
+        score = importance_scores[idx]
+        
+        important_edges.append({
+            'source': idx_to_node.get(src, f"Node_{src}"),
+            'target': idx_to_node.get(dst, f"Node_{dst}"),
+            'relation': idx_to_rel.get(rel, f"Rel_{rel}"),
+            'importance': float(score)
+        })
+    
+    explanation = {
+        'triple': triple.tolist(),
+        'head': idx_to_node.get(head_idx, f"Node_{head_idx}"),
+        'relation': idx_to_rel.get(rel_idx, f"Rel_{rel_idx}"),
+        'tail': idx_to_node.get(tail_idx, f"Node_{tail_idx}"),
+        'original_score': float(original_score.item()),
+        'important_edges': important_edges,
+        'edge_mask': torch.tensor(importance_scores)
+    }
+    
+    return explanation
 
 def visualize_simple_explanation(explanation: Dict,
                                  edge_index: torch.Tensor,
@@ -522,7 +612,7 @@ def main():
                 explainer = Explainer(
                     model=wrapper,
                     algorithm=PGExplainer(epochs=30, lr=0.003),
-                    explanation_type='model',
+                    explanation_type='phenomenon',
                     #node_mask_type='attributes',
                     edge_mask_type='object',
                     model_config=dict(

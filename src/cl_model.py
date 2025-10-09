@@ -407,6 +407,181 @@ def evaluate(model: RGCNDistMultModel,
     
     return results
 
+def visualize_explanation(explanation_data: Dict,
+                         edge_index: torch.Tensor,
+                         edge_type: torch.Tensor,
+                         node_dict: Dict[str, int],
+                         rel_dict: Dict[str, int],
+                         save_path: str,
+                         k_hops: int = 2):
+    """
+    Visualize explanation subgraph and save as figure.
+    
+    Args:
+        explanation_data: Dictionary containing triple and masks
+        edge_index: Full graph edge indices
+        edge_type: Full graph edge types
+        node_dict: Node to index mapping
+        rel_dict: Relation to index mapping
+        save_path: Path to save the figure
+        k_hops: Number of hops for subgraph extraction
+    """
+    triple = explanation_data['triple']
+    edge_mask = explanation_data.get('edge_mask')
+    
+    head_idx, rel_idx, tail_idx = triple
+    
+    # Reverse dictionaries for labels
+    idx_to_node = {v: k for k, v in node_dict.items()}
+    idx_to_rel = {v: k for k, v in rel_dict.items()}
+    
+    # Extract k-hop subgraph around head and tail
+    nodes_of_interest = torch.tensor([head_idx, tail_idx])
+    subset, sub_edge_index, mapping, edge_mask_sub = k_hop_subgraph(
+        nodes_of_interest,
+        k_hops,
+        edge_index,
+        relabel_nodes=True,
+        num_nodes=edge_index.max().item() + 1
+    )
+    
+    # Get edge types for subgraph
+    sub_edge_type = edge_type[edge_mask_sub]
+    
+    # Get explanation scores for subgraph edges if available
+    if edge_mask is not None:
+        explanation_scores = edge_mask[edge_mask_sub].cpu().numpy()
+    else:
+        explanation_scores = np.ones(sub_edge_index.shape[1])
+    
+    # Normalize scores for visualization
+    if explanation_scores.max() > explanation_scores.min():
+        explanation_scores = (explanation_scores - explanation_scores.min()) / \
+                           (explanation_scores.max() - explanation_scores.min())
+    
+    # Create NetworkX graph
+    G = nx.DiGraph()
+    
+    # Add nodes
+    for i, node_idx in enumerate(subset.tolist()):
+        node_label = idx_to_node.get(node_idx, f"Node_{node_idx}")
+        # Truncate long labels
+        if len(node_label) > 20:
+            node_label = node_label[:17] + "..."
+        G.add_node(i, label=node_label, original_idx=node_idx)
+    
+    # Add edges with explanation scores
+    edge_colors = []
+    edge_widths = []
+    edge_labels = {}
+    
+    for i in range(sub_edge_index.shape[1]):
+        src = sub_edge_index[0, i].item()
+        dst = sub_edge_index[1, i].item()
+        rel = sub_edge_type[i].item()
+        score = explanation_scores[i]
+        
+        rel_label = idx_to_rel.get(rel, f"Rel_{rel}")
+        if len(rel_label) > 15:
+            rel_label = rel_label[:12] + "..."
+        
+        G.add_edge(src, dst, relation=rel_label, score=score)
+        edge_labels[(src, dst)] = rel_label
+        
+        # Color based on importance
+        edge_colors.append(score)
+        edge_widths.append(1 + score * 3)  # Width from 1 to 4
+    
+    # Create figure
+    fig, ax = plt.subplots(figsize=(16, 12))
+    
+    # Layout
+    pos = nx.spring_layout(G, k=2, iterations=50, seed=42)
+    
+    # Identify target nodes in subgraph
+    head_subgraph_idx = mapping[0].item() if head_idx in subset else None
+    tail_subgraph_idx = mapping[1].item() if tail_idx in subset else None
+    
+    # Draw nodes with different colors for head/tail
+    node_colors = []
+    node_sizes = []
+    for node in G.nodes():
+        if node == head_subgraph_idx:
+            node_colors.append('#FF6B6B')  # Red for head
+            node_sizes.append(2000)
+        elif node == tail_subgraph_idx:
+            node_colors.append('#4ECDC4')  # Cyan for tail
+            node_sizes.append(2000)
+        else:
+            node_colors.append('#95E1D3')  # Light green for others
+            node_sizes.append(1000)
+    
+    # Draw nodes
+    nx.draw_networkx_nodes(G, pos, node_color=node_colors, 
+                          node_size=node_sizes, alpha=0.9, ax=ax)
+    
+    # Draw edges with gradient colors based on importance
+    edges = G.edges()
+    edge_collection = nx.draw_networkx_edges(
+        G, pos, edgelist=edges, edge_color=edge_colors,
+        width=edge_widths, alpha=0.7, edge_cmap=plt.cm.YlOrRd,
+        edge_vmin=0, edge_vmax=1, arrows=True,
+        arrowsize=20, arrowstyle='->', connectionstyle='arc3,rad=0.1',
+        ax=ax
+    )
+    
+    # Draw node labels
+    node_labels_dict = nx.get_node_attributes(G, 'label')
+    nx.draw_networkx_labels(G, pos, node_labels_dict, 
+                           font_size=9, font_weight='bold', ax=ax)
+    
+    # Draw edge labels (relations)
+    nx.draw_networkx_edge_labels(G, pos, edge_labels, 
+                                 font_size=7, font_color='darkblue',
+                                 bbox=dict(boxstyle='round,pad=0.3', 
+                                         facecolor='white', alpha=0.7),
+                                 ax=ax)
+    
+    # Add colorbar for edge importance
+    sm = plt.cm.ScalarMappable(cmap=plt.cm.YlOrRd, 
+                               norm=plt.Normalize(vmin=0, vmax=1))
+    sm.set_array([])
+    cbar = plt.colorbar(sm, ax=ax, fraction=0.046, pad=0.04)
+    cbar.set_label('Edge Importance', rotation=270, labelpad=20, fontsize=12)
+    
+    # Title with triple information
+    head_label = idx_to_node.get(head_idx, f"Node_{head_idx}")
+    tail_label = idx_to_node.get(tail_idx, f"Node_{tail_idx}")
+    rel_label = idx_to_rel.get(rel_idx, f"Rel_{rel_idx}")
+    
+    # Truncate for title
+    if len(head_label) > 25:
+        head_label = head_label[:22] + "..."
+    if len(tail_label) > 25:
+        tail_label = tail_label[:22] + "..."
+    if len(rel_label) > 25:
+        rel_label = rel_label[:22] + "..."
+    
+    title = f"Explanation for Triple: ({head_label}) -[{rel_label}]-> ({tail_label})"
+    ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
+    
+    # Legend
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor='#FF6B6B', label='Head Entity'),
+        Patch(facecolor='#4ECDC4', label='Tail Entity'),
+        Patch(facecolor='#95E1D3', label='Context Nodes')
+    ]
+    ax.legend(handles=legend_elements, loc='upper left', fontsize=10)
+    
+    ax.axis('off')
+    plt.tight_layout()
+    
+    # Save figure
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"  Saved visualization to {save_path}")
 
 def visualize_simple_explanation(explanation: Dict,
                                  edge_index: torch.Tensor,
@@ -529,6 +704,100 @@ def visualize_simple_explanation(explanation: Dict,
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
 
+def link_prediction_explainer(model, edge_index, edge_type, triple, 
+                              node_dict, rel_dict, device, k_hops=2):
+    """
+    Custom explainer specifically for link prediction tasks.
+    Uses edge perturbation to find important edges.
+    """
+    from torch_geometric.utils import k_hop_subgraph
+    
+    head_idx, rel_idx, tail_idx = triple
+    
+    # Get original prediction score
+    model.eval()
+    with torch.no_grad():
+        original_score = model(edge_index, edge_type,
+                              triple[0:1].to(device),
+                              triple[2:3].to(device),
+                              triple[1:2].to(device))
+    
+    # Extract k-hop subgraph around triple
+    nodes_of_interest = torch.tensor([head_idx, tail_idx])
+    subset, sub_edge_index, mapping, edge_mask_sub = k_hop_subgraph(
+        nodes_of_interest,
+        k_hops,
+        edge_index,
+        relabel_nodes=True,
+        num_nodes=edge_index.max().item() + 1
+    )
+    
+    sub_edge_type = edge_type[edge_mask_sub]
+    original_edge_indices = torch.where(edge_mask_sub)[0]
+    
+    # Compute importance by edge removal
+    importance_scores = []
+    
+    print(f"  Testing {len(original_edge_indices)} edges in {k_hops}-hop subgraph...")
+    
+    for i, edge_idx in enumerate(original_edge_indices):
+        # Create mask removing this edge
+        mask = torch.ones(edge_index.shape[1], dtype=torch.bool)
+        mask[edge_idx] = False
+        
+        # Forward pass without this edge
+        with torch.no_grad():
+            masked_edge_index = edge_index[:, mask]
+            masked_edge_type = edge_type[mask]
+            
+            new_score = model(masked_edge_index, masked_edge_type,
+                            triple[0:1], triple[2:3], triple[1:2])
+        
+        # Importance = change in prediction
+        importance = abs(original_score.item() - new_score.item())
+        importance_scores.append(importance)
+    
+        if (i + 1) % 100 == 0:
+            print(f"    Processed {i+1}/{len(original_edge_indices)} edges...")
+    # Normalize scores
+    importance_scores = np.array(importance_scores)
+    if importance_scores.max() > 0:
+        importance_scores = importance_scores / importance_scores.max()
+    
+    # Create explanation dict
+    idx_to_node = {v: k for k, v in node_dict.items()}
+    idx_to_rel = {v: k for k, v in rel_dict.items()}
+    
+    # Sort edges by importance
+    sorted_indices = np.argsort(importance_scores)[::-1]
+    top_k = min(10, len(sorted_indices))
+    
+    important_edges = []
+    for idx in sorted_indices[:top_k]:
+        edge_global_idx = original_edge_indices[idx].item()
+        src = edge_index[0, edge_global_idx].item()
+        dst = edge_index[1, edge_global_idx].item()
+        rel = edge_type[edge_global_idx].item()
+        score = importance_scores[idx]
+        
+        important_edges.append({
+            'source': idx_to_node.get(src, f"Node_{src}"),
+            'target': idx_to_node.get(dst, f"Node_{dst}"),
+            'relation': idx_to_rel.get(rel, f"Rel_{rel}"),
+            'importance': float(score)
+        })
+    
+    explanation = {
+        'triple': triple.tolist(),
+        'head': idx_to_node.get(head_idx, f"Node_{head_idx}"),
+        'relation': idx_to_rel.get(rel_idx, f"Rel_{rel_idx}"),
+        'tail': idx_to_node.get(tail_idx, f"Node_{tail_idx}"),
+        'original_score': float(original_score.item()),
+        'important_edges': important_edges,
+        'edge_mask': importance_scores
+    }
+    
+    return explanation
 
 def simple_path_explanation(edge_index: torch.Tensor,
                             edge_type: torch.Tensor,
@@ -621,33 +890,19 @@ def explain_triples(model: RGCNDistMultModel,
                    num_samples: int = 10,
                    save_dir: str = 'explanations',
                    k_hops: int = 2,
-                   use_simple_explanation: bool = False) -> List[Dict]:
+                   use_simple_explanation: bool = False,
+                   use_perturbation: bool = False) -> List[Dict]:  # NEW FLAG
     """
-    Use GNNExplainer to explain test triples and visualize them.
-    Falls back to simple path-based explanation if GNNExplainer fails.
+    Explain test triples using different methods.
     
     Args:
-        model: Trained model
-        edge_index: Graph edge indices
-        edge_type: Graph edge types
-        test_triples: Test triples to explain
-        node_dict: Node to index mapping
-        rel_dict: Relation to index mapping
-        device: Device
-        num_samples: Number of test samples to explain
-        save_dir: Directory to save visualizations
-        k_hops: Number of hops for subgraph visualization
-        use_simple_explanation: If True, skip GNNExplainer and use path-based method
-    
-    Returns:
-        List of explanations
+        use_simple_explanation: Use path-based explanation
+        use_perturbation: Use edge perturbation explainer
     """
     model.eval()
-    
-    # Create save directory
     os.makedirs(save_dir, exist_ok=True)
     
-    # Analyze graph connectivity first
+    # Analyze graph connectivity
     print("\nAnalyzing graph connectivity...")
     degrees = torch.zeros(model.num_nodes, dtype=torch.long)
     for i in range(edge_index.shape[1]):
@@ -657,20 +912,13 @@ def explain_triples(model: RGCNDistMultModel,
         degrees[dst] += 1
     
     avg_degree = degrees.float().mean().item()
-    isolated_nodes = (degrees == 0).sum().item()
-    
     print(f"Average degree: {avg_degree:.2f}")
-    print(f"Isolated nodes: {isolated_nodes}")
-    
-    if avg_degree < 5:
-        print("⚠️  WARNING: Graph has low connectivity (avg degree < 5)")
-        print("   This may cause GNNExplainer to fail. Using simple path-based explanation.")
-        use_simple_explanation = True
     
     explanations = []
     sample_indices = torch.randperm(len(test_triples))[:num_samples]
     
-    print(f"\nGenerating explanations for {num_samples} test triples...")
+    method = "perturbation-based" if use_perturbation else "path-based"
+    print(f"\nGenerating {method} explanations for {num_samples} test triples...")
     
     successful = 0
     failed = 0
@@ -680,39 +928,30 @@ def explain_triples(model: RGCNDistMultModel,
         
         print(f"\n[{idx_num+1}/{num_samples}] Explaining triple: {triple.cpu().tolist()}")
         
-        # Check connectivity of this triple
-        head_idx = triple[0].item()
-        tail_idx = triple[2].item()
-        head_degree = degrees[head_idx].item()
-        tail_degree = degrees[tail_idx].item()
-        
-        print(f"  Head degree: {head_degree}, Tail degree: {tail_degree}")
-        
-        if head_degree == 0 or tail_degree == 0:
-            print(f"  ⚠️  Isolated node detected, using simple explanation")
-            use_simple_for_this = True
-        else:
-            use_simple_for_this = use_simple_explanation
-        
         try:
-            if use_simple_for_this:
-                # Use simple path-based explanation
-                explanation_data = simple_path_explanation(
-                    edge_index.cpu(),
-                    edge_type.cpu(),
+            if use_perturbation:
+                # Use perturbation-based explainer
+                explanation_data = link_prediction_explainer(
+                    model,
+                    edge_index.to(device),
+                    edge_type.to(device),
                     triple,
                     node_dict,
                     rel_dict,
+                    device,
                     k_hops=k_hops
                 )
                 
-                print(f"  Found {explanation_data['num_paths_found']} connecting paths")
+                print(f"  Original score: {explanation_data['original_score']:.4f}")
+                print(f"  Top 5 important edges:")
+                for i, edge in enumerate(explanation_data['important_edges'][:5]):
+                    print(f"    {i+1}. {edge['source']} -[{edge['relation']}]-> {edge['target']} (importance: {edge['importance']:.4f})")
                 
                 explanations.append(explanation_data)
                 
-                # Visualize
+                # Visualize with edge importance
                 save_path = os.path.join(save_dir, f'explanation_{idx_num+1}.png')
-                visualize_simple_explanation(
+                visualize_explanation(
                     explanation_data,
                     edge_index.cpu(),
                     edge_type.cpu(),
@@ -723,67 +962,23 @@ def explain_triples(model: RGCNDistMultModel,
                 )
                 print(f"  ✓ Saved to {save_path}")
                 successful += 1
+                
             else:
-                # Try GNNExplainer (may fail)
-                triple_device = triple.to(device)
-                
-                # Create wrapper
-                class ModelWrapper(nn.Module):
-                    def __init__(self, base_model, edge_index, edge_type, target_triple):
-                        super().__init__()
-                        self.base_model = base_model
-                        self.edge_index = edge_index
-                        self.edge_type = edge_type
-                        self.target_triple = target_triple
-                    
-                    def forward(self, x, edge_index, edge_attr=None):
-                        node_emb = self.base_model.encode(edge_index, edge_attr)
-                        score = self.base_model.decode(
-                            node_emb,
-                            self.target_triple[0:1],
-                            self.target_triple[2:3],
-                            self.target_triple[1:2]
-                        )
-                        return score
-                
-                wrapper = ModelWrapper(model, edge_index, edge_type, triple_device).to(device)
-                
-                explainer = Explainer(
-                    model=wrapper,
-                    algorithm=GNNExplainer(epochs=100),
-                    explanation_type='model',
-                    node_mask_type='attributes',
-                    edge_mask_type='object',
-                    model_config=dict(
-                        mode='regression',
-                        task_level='graph',
-                        return_type='raw',
-                    ),
+                # Use path-based explanation
+                explanation_data = simple_path_explanation(
+                    edge_index.cpu(),
+                    edge_type.cpu(),
+                    triple,
+                    node_dict,
+                    rel_dict,
+                    k_hops=k_hops
                 )
                 
-                data = Data(
-                    x=model.node_embeddings.detach(),
-                    edge_index=edge_index,
-                    edge_attr=edge_type
-                ).to(device)
-                
-                explanation = explainer(
-                    x=data.x,
-                    edge_index=data.edge_index,
-                    edge_attr=data.edge_attr
-                )
-                
-                explanation_data = {
-                    'triple': triple.cpu().tolist(),
-                    'edge_mask': explanation.edge_mask.cpu() if hasattr(explanation, 'edge_mask') else None,
-                    'node_mask': explanation.node_mask.cpu() if hasattr(explanation, 'node_mask') else None,
-                }
-                
+                print(f"  Found {explanation_data['num_paths_found']} connecting paths")
                 explanations.append(explanation_data)
                 
-                # Visualize
                 save_path = os.path.join(save_dir, f'explanation_{idx_num+1}.png')
-                visualize_explanation(
+                visualize_simple_explanation(
                     explanation_data,
                     edge_index.cpu(),
                     edge_type.cpu(),
@@ -798,37 +993,8 @@ def explain_triples(model: RGCNDistMultModel,
         except Exception as e:
             print(f"  ✗ Error: {str(e)}")
             failed += 1
-            
-            # Try fallback to simple explanation
-            try:
-                print(f"  Trying fallback to simple path explanation...")
-                explanation_data = simple_path_explanation(
-                    edge_index.cpu(),
-                    edge_type.cpu(),
-                    triple,
-                    node_dict,
-                    rel_dict,
-                    k_hops=k_hops
-                )
-                
-                print(f"  Found {explanation_data['num_paths_found']} connecting paths")
-                explanations.append(explanation_data)
-                
-                save_path = os.path.join(save_dir, f'explanation_{idx_num+1}.png')
-                visualize_simple_explanation(
-                    explanation_data,
-                    edge_index.cpu(),
-                    edge_type.cpu(),
-                    node_dict,
-                    rel_dict,
-                    save_path,
-                    k_hops=k_hops
-                )
-                print(f"  ✓ Saved fallback explanation to {save_path}")
-                successful += 1
-                failed -= 1
-            except Exception as e2:
-                print(f"  ✗ Fallback also failed: {str(e2)}")
+            import traceback
+            traceback.print_exc()
     
     print(f"\n{'='*50}")
     print(f"Explanation Summary:")
@@ -837,7 +1003,6 @@ def explain_triples(model: RGCNDistMultModel,
     print(f"{'='*50}")
     
     return explanations
-
 
 def main():
     """Main training and explanation pipeline."""
@@ -897,6 +1062,8 @@ def main():
                        help='Number of hops for explanation subgraph visualization')
     parser.add_argument('--use_simple_explanation', action='store_true',
                        help='Use simple path-based explanation instead of GNNExplainer')
+    parser.add_argument('--use_perturbation', action='store_true', 
+                   help='Use edge perturbation explainer (slower but shows importance scores)')
     
     # Output paths
     parser.add_argument('--model_save_path', type=str, default='best_model.pt',
@@ -1017,7 +1184,8 @@ def main():
             device, num_samples=args.num_explain,
             save_dir=args.explanation_dir,
             k_hops=args.explanation_khops,
-            use_simple_explanation=args.use_simple_explanation
+            use_simple_explanation=args.use_simple_explanation,
+            use_perturbation=args.use_perturbation
         )
         
         # Save explanations

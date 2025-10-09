@@ -11,7 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import RGCNConv
 from torch_geometric.data import Data
-from torch_geometric.explain import Explainer, GNNExplainer
+from torch_geometric.explain import Explainer, GNNExplainer, PGExplainer
 from torch_geometric.utils import k_hop_subgraph
 import numpy as np
 import matplotlib.pyplot as plt
@@ -521,9 +521,9 @@ def main():
                 
                 explainer = Explainer(
                     model=wrapper,
-                    algorithm=GNNExplainer(epochs=100),
+                    algorithm=PGExplainer(epochs=30, lr=0.003),
                     explanation_type='model',
-                    node_mask_type='attributes',
+                    #node_mask_type='attributes',
                     edge_mask_type='object',
                     model_config=dict(
                         mode='regression',

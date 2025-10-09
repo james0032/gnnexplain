@@ -441,24 +441,15 @@ def visualize_explanation(explanation_data: Dict,
     
     # Get explanation scores for subgraph edges
     if edge_mask is not None:
-        # FIX: edge_mask is already for the subgraph, not the full graph
         if isinstance(edge_mask, np.ndarray):
-            explanation_scores = edge_mask
+            full_edge_mask = edge_mask
         elif isinstance(edge_mask, torch.Tensor):
-            explanation_scores = edge_mask.cpu().numpy()
+            full_edge_mask = edge_mask.cpu().numpy()
         else:
-            explanation_scores = np.array(edge_mask)
+            full_edge_mask = np.array(edge_mask)
         
-        # Check if sizes match
-        if len(explanation_scores) != sub_edge_index.shape[1]:
-            print(f"  Warning: edge_mask size ({len(explanation_scores)}) != subgraph edges ({sub_edge_index.shape[1]})")
-            # If they match the original subgraph size, use as-is
-            # Otherwise, default to uniform scores
-            if len(explanation_scores) == sub_edge_index.shape[1]:
-                pass  # Use as-is
-            else:
-                print(f"  Using uniform edge scores")
-                explanation_scores = np.ones(sub_edge_index.shape[1])
+        # Extract scores for subgraph edges
+        explanation_scores = full_edge_mask[edge_mask_sub.cpu().numpy()]
     else:
         explanation_scores = np.ones(sub_edge_index.shape[1])
     
@@ -466,14 +457,15 @@ def visualize_explanation(explanation_data: Dict,
     if explanation_scores.max() > explanation_scores.min():
         explanation_scores = (explanation_scores - explanation_scores.min()) / \
                            (explanation_scores.max() - explanation_scores.min())
-     
+    else:
+        explanation_scores = np.ones_like(explanation_scores) * 0.5
+    
     # Create NetworkX graph
     G = nx.DiGraph()
     
     # Add nodes
     for i, node_idx in enumerate(subset.tolist()):
         node_label = idx_to_node.get(node_idx, f"Node_{node_idx}")
-        # Truncate long labels
         if len(node_label) > 20:
             node_label = node_label[:17] + "..."
         G.add_node(i, label=node_label, original_idx=node_idx)
@@ -528,15 +520,22 @@ def visualize_explanation(explanation_data: Dict,
     nx.draw_networkx_nodes(G, pos, node_color=node_colors, 
                           node_size=node_sizes, alpha=0.9, ax=ax)
     
-    # Draw edges with gradient colors based on importance
-    edges = G.edges()
-    edge_collection = nx.draw_networkx_edges(
-        G, pos, edgelist=edges, edge_color=edge_colors,
-        width=edge_widths, alpha=0.7, edge_cmap=plt.cm.YlOrRd,
-        edge_vmin=0, edge_vmax=1, arrows=True,
-        arrowsize=20, arrowstyle='->', connectionstyle='arc3,rad=0.1',
-        ax=ax
-    )
+    # FIX: Draw edges with proper color mapping
+    from matplotlib.colors import Normalize
+    norm = Normalize(vmin=0, vmax=1)
+    cmap = plt.cm.YlOrRd
+    
+    edges = list(G.edges())
+    for (u, v), color_val, width in zip(edges, edge_colors, edge_widths):
+        rgba = cmap(norm(color_val))
+        nx.draw_networkx_edges(
+            G, pos, [(u, v)], 
+            edge_color=[rgba],
+            width=width, alpha=0.7,
+            arrows=True, arrowsize=20, arrowstyle='->',
+            connectionstyle='arc3,rad=0.1',
+            ax=ax
+        )
     
     # Draw node labels
     node_labels_dict = nx.get_node_attributes(G, 'label')
@@ -551,8 +550,7 @@ def visualize_explanation(explanation_data: Dict,
                                  ax=ax)
     
     # Add colorbar for edge importance
-    sm = plt.cm.ScalarMappable(cmap=plt.cm.YlOrRd, 
-                               norm=plt.Normalize(vmin=0, vmax=1))
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
     cbar = plt.colorbar(sm, ax=ax, fraction=0.046, pad=0.04)
     cbar.set_label('Edge Importance', rotation=270, labelpad=20, fontsize=12)
@@ -590,7 +588,7 @@ def visualize_explanation(explanation_data: Dict,
     plt.close()
     
     print(f"  Saved visualization to {save_path}")
-
+    
 def visualize_simple_explanation(explanation: Dict,
                                  edge_index: torch.Tensor,
                                  edge_type: torch.Tensor,
@@ -713,10 +711,13 @@ def visualize_simple_explanation(explanation: Dict,
     plt.close()
 
 def link_prediction_explainer(model, edge_index, edge_type, triple, 
-                              node_dict, rel_dict, device, k_hops=2):
+                              node_dict, rel_dict, device, k_hops=2, max_edges=2000):
     """
     Custom explainer specifically for link prediction tasks.
     Uses edge perturbation to find important edges.
+    
+    Args:
+        max_edges: Maximum number of edges to test. Skip if subgraph is larger.
     """
     from torch_geometric.utils import k_hop_subgraph
     
@@ -744,6 +745,12 @@ def link_prediction_explainer(model, edge_index, edge_type, triple,
     
     sub_edge_type = edge_type[edge_mask_sub]
     original_edge_indices = torch.where(edge_mask_sub)[0]
+    
+    # CHECK: Skip if subgraph is too large
+    if len(original_edge_indices) > max_edges:
+        print(f"  ⚠️  Skipping: subgraph has {len(original_edge_indices)} edges (max: {max_edges})")
+        # Return None to signal that explanation should be skipped
+        return None
     
     # Compute importance by edge removal
     importance_scores = []
@@ -777,7 +784,7 @@ def link_prediction_explainer(model, edge_index, edge_type, triple,
     if importance_scores.max() > 0:
         importance_scores = importance_scores / importance_scores.max()
     
-    # NEW: Create full-graph edge mask
+    # Create full-graph edge mask
     full_edge_mask = np.zeros(edge_index.shape[1])
     for i, edge_idx in enumerate(original_edge_indices):
         full_edge_mask[edge_idx] = importance_scores[i]
@@ -812,7 +819,7 @@ def link_prediction_explainer(model, edge_index, edge_type, triple,
         'tail': idx_to_node.get(tail_idx, f"Node_{tail_idx}"),
         'original_score': float(original_score.item()),
         'important_edges': important_edges,
-        'edge_mask': torch.tensor(full_edge_mask)  # Full graph mask
+        'edge_mask': torch.tensor(full_edge_mask)
     }
     
     return explanation
@@ -909,13 +916,13 @@ def explain_triples(model: RGCNDistMultModel,
                    save_dir: str = 'explanations',
                    k_hops: int = 2,
                    use_simple_explanation: bool = False,
-                   use_perturbation: bool = False) -> List[Dict]:  # NEW FLAG
+                   use_perturbation: bool = False,
+                   max_edges: int = 2000) -> List[Dict]:  # NEW PARAMETER
     """
     Explain test triples using different methods.
     
     Args:
-        use_simple_explanation: Use path-based explanation
-        use_perturbation: Use edge perturbation explainer
+        max_edges: Maximum edges for perturbation explainer (skip if larger)
     """
     model.eval()
     os.makedirs(save_dir, exist_ok=True)
@@ -940,6 +947,7 @@ def explain_triples(model: RGCNDistMultModel,
     
     successful = 0
     failed = 0
+    skipped = 0  # NEW COUNTER
     
     for idx_num, idx in enumerate(sample_indices):
         triple = test_triples[idx]
@@ -957,8 +965,14 @@ def explain_triples(model: RGCNDistMultModel,
                     node_dict,
                     rel_dict,
                     device,
-                    k_hops=k_hops
+                    k_hops=k_hops,
+                    max_edges=max_edges  # PASS PARAMETER
                 )
+                
+                # CHECK: Handle None return (skipped)
+                if explanation_data is None:
+                    skipped += 1
+                    continue
                 
                 print(f"  Original score: {explanation_data['original_score']:.4f}")
                 print(f"  Top 5 important edges:")
@@ -1017,6 +1031,7 @@ def explain_triples(model: RGCNDistMultModel,
     print(f"\n{'='*50}")
     print(f"Explanation Summary:")
     print(f"  Successful: {successful}/{num_samples}")
+    print(f"  Skipped (too large): {skipped}/{num_samples}")  
     print(f"  Failed: {failed}/{num_samples}")
     print(f"{'='*50}")
     
@@ -1082,6 +1097,8 @@ def main():
                        help='Use simple path-based explanation instead of GNNExplainer')
     parser.add_argument('--use_perturbation', action='store_true', 
                    help='Use edge perturbation explainer (slower but shows importance scores)')
+    parser.add_argument('--max_edges', type=int, default=2000, 
+                   help='Maximum edges for perturbation explainer (skip triples with more edges)')
     
     # Output paths
     parser.add_argument('--model_save_path', type=str, default='best_model.pt',
@@ -1203,7 +1220,8 @@ def main():
             save_dir=args.explanation_dir,
             k_hops=args.explanation_khops,
             use_simple_explanation=args.use_simple_explanation,
-            use_perturbation=args.use_perturbation
+            use_perturbation=args.use_perturbation,
+            max_edges=args.max_edges
         )
         
         # Save explanations

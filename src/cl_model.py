@@ -121,12 +121,17 @@ class RGCNDistMultModel(nn.Module):
 class KGDataLoader:
     """Load and preprocess knowledge graph data."""
     
-    def __init__(self, node_dict_path: str, rel_dict_path: str):
+    def __init__(self, node_dict_path: str, rel_dict_path: str, edge_map_path: str = None):
         self.node_dict = self.load_dict(node_dict_path)
         self.rel_dict = self.load_dict(rel_dict_path)
         self.num_nodes = len(self.node_dict)
         self.num_relations = len(self.rel_dict)
-    
+        # Load edge map for predicate names
+        if edge_map_path:
+            self.edge_map = load_edge_map(edge_map_path)
+        else:
+            self.edge_map = {}
+            
     @staticmethod
     def load_dict(path: str) -> Dict[str, int]:
         """Load entity or relation dictionary."""
@@ -171,6 +176,65 @@ class KGDataLoader:
         edge_type = triples[:, 1]
         return edge_index, edge_type
 
+def load_edge_map(edge_map_path: str) -> Dict[int, str]:
+    """
+    Load edge mapping from JSON file and extract predicate names.
+    
+    Args:
+        edge_map_path: Path to edge_map.json
+    
+    Returns:
+        Dictionary mapping relation index to predicate name
+    """
+    import json
+    
+    edge_to_predicate = {}
+    
+    try:
+        with open(edge_map_path, 'r') as f:
+            edge_map = json.load(f)
+        
+        # edge_map format: 
+        # {"{\"predicate\": \"biolink:contributes_to\", ...}": "predicate:0", ...}
+        for key_str, value in edge_map.items():
+            try:
+                # Parse the JSON key string
+                key_dict = json.loads(key_str)
+                
+                # Extract the predicate from the key
+                if 'predicate' in key_dict:
+                    predicate_full = key_dict['predicate']
+                    
+                    # Extract just the part after "biolink:" if present
+                    if 'biolink:' in predicate_full:
+                        predicate_name = predicate_full.split('biolink:')[1]
+                    else:
+                        predicate_name = predicate_full
+                    
+                    # Extract the index from "predicate:0" -> 0
+                    if isinstance(value, str) and ':' in value:
+                        idx = int(value.split(':')[1])
+                        edge_to_predicate[idx] = predicate_name
+                    else:
+                        print(f"Warning: Unexpected value format: {value}")
+                        
+            except json.JSONDecodeError as e:
+                print(f"Warning: Could not parse key: {key_str[:50]}... Error: {e}")
+                continue
+            except (ValueError, IndexError) as e:
+                print(f"Warning: Could not extract index from value: {value}. Error: {e}")
+                continue
+    
+    except FileNotFoundError:
+        print(f"Warning: {edge_map_path} not found. Using default relation labels.")
+        return {}
+    except Exception as e:
+        print(f"Warning: Error loading {edge_map_path}: {e}. Using default relation labels.")
+        return {}
+    
+    print(f"Loaded {len(edge_to_predicate)} predicate mappings from {edge_map_path}")
+    
+    return edge_to_predicate
 
 def generate_negative_samples(positive_triples: torch.Tensor, 
                               num_nodes: int, 
@@ -413,7 +477,8 @@ def visualize_explanation(explanation_data: Dict,
                          node_dict: Dict[str, int],
                          rel_dict: Dict[str, int],
                          save_path: str,
-                         k_hops: int = 2):
+                         k_hops: int = 2,
+                         edge_map: Dict[int, str] = None):  
     """
     Visualize explanation subgraph and save as figure.
     """
@@ -425,6 +490,12 @@ def visualize_explanation(explanation_data: Dict,
     # Reverse dictionaries for labels
     idx_to_node = {v: k for k, v in node_dict.items()}
     idx_to_rel = {v: k for k, v in rel_dict.items()}
+    
+    # Function to get relation name
+    def get_relation_name(rel_idx):
+        if edge_map and rel_idx in edge_map:
+            return edge_map[rel_idx]
+        return idx_to_rel.get(rel_idx, f"Rel_{rel_idx}")
     
     # Extract k-hop subgraph around head and tail
     nodes_of_interest = torch.tensor([head_idx, tail_idx])
@@ -448,7 +519,6 @@ def visualize_explanation(explanation_data: Dict,
         else:
             full_edge_mask = np.array(edge_mask)
         
-        # Extract scores for subgraph edges
         explanation_scores = full_edge_mask[edge_mask_sub.cpu().numpy()]
     else:
         explanation_scores = np.ones(sub_edge_index.shape[1])
@@ -481,16 +551,16 @@ def visualize_explanation(explanation_data: Dict,
         rel = sub_edge_type[i].item()
         score = explanation_scores[i]
         
-        rel_label = idx_to_rel.get(rel, f"Rel_{rel}")
-        if len(rel_label) > 15:
-            rel_label = rel_label[:12] + "..."
+        # Use edge_map for relation names
+        rel_label = get_relation_name(rel)
+        if len(rel_label) > 20:
+            rel_label = rel_label[:17] + "..."
         
         G.add_edge(src, dst, relation=rel_label, score=score)
         edge_labels[(src, dst)] = rel_label
         
-        # Color based on importance
         edge_colors.append(score)
-        edge_widths.append(1 + score * 3)  # Width from 1 to 4
+        edge_widths.append(1 + score * 3)
     
     # Create figure
     fig, ax = plt.subplots(figsize=(16, 12))
@@ -507,20 +577,20 @@ def visualize_explanation(explanation_data: Dict,
     node_sizes = []
     for node in G.nodes():
         if node == head_subgraph_idx:
-            node_colors.append('#FF6B6B')  # Red for head
+            node_colors.append('#FF6B6B')
             node_sizes.append(2000)
         elif node == tail_subgraph_idx:
-            node_colors.append('#4ECDC4')  # Cyan for tail
+            node_colors.append('#4ECDC4')
             node_sizes.append(2000)
         else:
-            node_colors.append('#95E1D3')  # Light green for others
+            node_colors.append('#95E1D3')
             node_sizes.append(1000)
     
     # Draw nodes
     nx.draw_networkx_nodes(G, pos, node_color=node_colors, 
                           node_size=node_sizes, alpha=0.9, ax=ax)
     
-    # FIX: Draw edges with proper color mapping
+    # Draw edges with proper color mapping
     from matplotlib.colors import Normalize
     norm = Normalize(vmin=0, vmax=1)
     cmap = plt.cm.YlOrRd
@@ -555,27 +625,27 @@ def visualize_explanation(explanation_data: Dict,
     cbar = plt.colorbar(sm, ax=ax, fraction=0.046, pad=0.04)
     cbar.set_label('Edge Importance', rotation=270, labelpad=20, fontsize=12)
     
-    # Title with triple information
+    # Title with readable relation name
     head_label = idx_to_node.get(head_idx, f"Node_{head_idx}")
     tail_label = idx_to_node.get(tail_idx, f"Node_{tail_idx}")
-    rel_label = idx_to_rel.get(rel_idx, f"Rel_{rel_idx}")
+    rel_label = get_relation_name(rel_idx)
     
     # Truncate for title
     if len(head_label) > 25:
         head_label = head_label[:22] + "..."
     if len(tail_label) > 25:
         tail_label = tail_label[:22] + "..."
-    if len(rel_label) > 25:
-        rel_label = rel_label[:22] + "..."
+    if len(rel_label) > 30:
+        rel_label = rel_label[:27] + "..."
     
-    title = f"Explanation for Triple: ({head_label}) -[{rel_label}]-> ({tail_label})"
+    title = f"Explanation: ({head_label}) -[{rel_label}]-> ({tail_label})"
     ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
     
     # Legend
     from matplotlib.patches import Patch
     legend_elements = [
         Patch(facecolor='#FF6B6B', label='Head Entity'),
-        Patch(facecolor='#FF6B6B', label='Tail Entity'),
+        Patch(facecolor='#4ECDC4', label='Tail Entity'),
         Patch(facecolor='#95E1D3', label='Context Nodes')
     ]
     ax.legend(handles=legend_elements, loc='upper left', fontsize=10)
@@ -595,11 +665,22 @@ def visualize_simple_explanation(explanation: Dict,
                                  node_dict: Dict[str, int],
                                  rel_dict: Dict[str, int],
                                  save_path: str,
-                                 k_hops: int = 2):
+                                 k_hops: int = 2,
+                                 edge_map: Dict[int, str] = None): 
     """Visualize explanation using path information."""
     
     triple = explanation['triple']
     head_idx, rel_idx, tail_idx = triple
+    
+    # Reverse dictionaries
+    idx_to_node = {v: k for k, v in node_dict.items()}
+    idx_to_rel = {v: k for k, v in rel_dict.items()}
+    
+    # Function to get relation name
+    def get_relation_name(rel_idx):
+        if edge_map and rel_idx in edge_map:
+            return edge_map[rel_idx]
+        return idx_to_rel.get(rel_idx, f"Rel_{rel_idx}")
     
     # Extract k-hop subgraph
     nodes_of_interest = torch.tensor([head_idx, tail_idx])
@@ -612,10 +693,6 @@ def visualize_simple_explanation(explanation: Dict,
     )
     
     sub_edge_type = edge_type[edge_mask_sub]
-    
-    # Reverse dictionaries
-    idx_to_node = {v: k for k, v in node_dict.items()}
-    idx_to_rel = {v: k for k, v in rel_dict.items()}
     
     # Create NetworkX graph
     G = nx.DiGraph()
@@ -637,9 +714,10 @@ def visualize_simple_explanation(explanation: Dict,
         dst = sub_edge_index[1, i].item()
         rel = sub_edge_type[i].item()
         
-        rel_label = idx_to_rel.get(rel, f"Rel_{rel}")
-        if len(rel_label) > 15:
-            rel_label = rel_label[:12] + "..."
+        # Use edge_map for relation names
+        rel_label = get_relation_name(rel)
+        if len(rel_label) > 20:
+            rel_label = rel_label[:17] + "..."
         
         G.add_edge(src, dst, relation=rel_label)
         edge_labels[(src, dst)] = rel_label
@@ -700,7 +778,7 @@ def visualize_simple_explanation(explanation: Dict,
     from matplotlib.patches import Patch
     legend_elements = [
         Patch(facecolor='#FF6B6B', label='Head Entity'),
-        Patch(facecolor='#FF6B6B', label='Tail Entity'),
+        Patch(facecolor='#4ECDC4', label='Tail Entity'),
         Patch(facecolor='#95E1D3', label='Context Nodes')
     ]
     ax.legend(handles=legend_elements, loc='upper left', fontsize=10)
@@ -711,7 +789,8 @@ def visualize_simple_explanation(explanation: Dict,
     plt.close()
 
 def link_prediction_explainer(model, edge_index, edge_type, triple, 
-                              node_dict, rel_dict, device, k_hops=2, max_edges=2000):
+                              node_dict, rel_dict, device, k_hops=2, 
+                              max_edges=2000, edge_map=None): 
     """
     Custom explainer specifically for link prediction tasks.
     Uses edge perturbation to find important edges.
@@ -793,6 +872,12 @@ def link_prediction_explainer(model, edge_index, edge_type, triple,
     idx_to_node = {v: k for k, v in node_dict.items()}
     idx_to_rel = {v: k for k, v in rel_dict.items()}
     
+    # Function to get relation name
+    def get_relation_name(rel_idx):
+        if edge_map and rel_idx in edge_map:
+            return edge_map[rel_idx]
+        return idx_to_rel.get(rel_idx, f"Rel_{rel_idx}")
+    
     # Sort edges by importance
     sorted_indices = np.argsort(importance_scores)[::-1]
     top_k = min(10, len(sorted_indices))
@@ -808,14 +893,14 @@ def link_prediction_explainer(model, edge_index, edge_type, triple,
         important_edges.append({
             'source': idx_to_node.get(src, f"Node_{src}"),
             'target': idx_to_node.get(dst, f"Node_{dst}"),
-            'relation': idx_to_rel.get(rel, f"Rel_{rel}"),
+            'relation': get_relation_name(rel),
             'importance': float(score)
         })
     
     explanation = {
         'triple': triple.tolist(),
         'head': idx_to_node.get(head_idx, f"Node_{head_idx}"),
-        'relation': idx_to_rel.get(rel_idx, f"Rel_{rel_idx}"),
+        'relation': get_relation_name(rel_idx),
         'tail': idx_to_node.get(tail_idx, f"Node_{tail_idx}"),
         'original_score': float(original_score.item()),
         'important_edges': important_edges,
@@ -829,16 +914,26 @@ def simple_path_explanation(edge_index: torch.Tensor,
                             triple: torch.Tensor,
                             node_dict: Dict[str, int],
                             rel_dict: Dict[str, int],
-                            k_hops: int = 2) -> Dict:
+                            k_hops: int = 2,
+                            edge_map: Dict[int, str] = None) -> Dict:  # ✅ NEW PARAMETER
     """
     Simple path-based explanation: find paths connecting head to tail.
-    This doesn't rely on GNNExplainer and works even for sparse graphs.
     """
     from collections import defaultdict
     
     head_idx = triple[0].item()
     tail_idx = triple[2].item()
     rel_idx = triple[1].item()
+    
+    # Reverse mappings
+    idx_to_node = {v: k for k, v in node_dict.items()}
+    idx_to_rel = {v: k for k, v in rel_dict.items()}
+    
+    # ✅ Function to get relation name
+    def get_relation_name(rel_idx):
+        if edge_map and rel_idx in edge_map:
+            return edge_map[rel_idx]
+        return idx_to_rel.get(rel_idx, f"Rel_{rel_idx}")
     
     # Build adjacency for BFS
     adj = defaultdict(list)
@@ -851,9 +946,9 @@ def simple_path_explanation(edge_index: torch.Tensor,
     # BFS to find paths
     paths = []
     visited = set()
-    queue = [(head_idx, [], [])]  # (current_node, path_nodes, path_edges)
+    queue = [(head_idx, [], [])]
     
-    while queue and len(paths) < 5:  # Find up to 5 paths
+    while queue and len(paths) < 5:
         current, path_nodes, path_edges = queue.pop(0)
         
         if len(path_nodes) > k_hops:
@@ -875,14 +970,10 @@ def simple_path_explanation(edge_index: torch.Tensor,
                     path_edges + [(current, neighbor, rel, edge_idx)]
                 ))
     
-    # Reverse mappings
-    idx_to_node = {v: k for k, v in node_dict.items()}
-    idx_to_rel = {v: k for k, v in rel_dict.items()}
-    
     explanation = {
         'triple': triple.tolist(),
         'head': idx_to_node.get(head_idx, f"Node_{head_idx}"),
-        'relation': idx_to_rel.get(rel_idx, f"Rel_{rel_idx}"),
+        'relation': get_relation_name(rel_idx),  # ✅ Use readable name
         'tail': idx_to_node.get(tail_idx, f"Node_{tail_idx}"),
         'num_paths_found': len(paths),
         'paths': []
@@ -893,7 +984,7 @@ def simple_path_explanation(edge_index: torch.Tensor,
         for src, dst, rel, _ in path_edges:
             src_name = idx_to_node.get(src, f"Node_{src}")
             dst_name = idx_to_node.get(dst, f"Node_{dst}")
-            rel_name = idx_to_rel.get(rel, f"Rel_{rel}")
+            rel_name = get_relation_name(rel)  # ✅ Use readable name
             path_desc.append(f"{src_name} -[{rel_name}]-> {dst_name}")
         
         explanation['paths'].append({
@@ -917,7 +1008,8 @@ def explain_triples(model: RGCNDistMultModel,
                    k_hops: int = 2,
                    use_simple_explanation: bool = False,
                    use_perturbation: bool = False,
-                   max_edges: int = 2000) -> List[Dict]:  # NEW PARAMETER
+                   max_edges: int = 2000,
+                   edge_map: Dict[int, str] = None) -> List[Dict]:
     """
     Explain test triples using different methods.
     
@@ -966,7 +1058,8 @@ def explain_triples(model: RGCNDistMultModel,
                     rel_dict,
                     device,
                     k_hops=k_hops,
-                    max_edges=max_edges  # PASS PARAMETER
+                    max_edges=max_edges,
+                    edge_map=edge_map
                 )
                 
                 # CHECK: Handle None return (skipped)
@@ -990,7 +1083,8 @@ def explain_triples(model: RGCNDistMultModel,
                     node_dict,
                     rel_dict,
                     save_path,
-                    k_hops=k_hops
+                    k_hops=k_hops,
+                    edge_map=edge_map
                 )
                 print(f"  ✓ Saved to {save_path}")
                 successful += 1
@@ -1003,7 +1097,8 @@ def explain_triples(model: RGCNDistMultModel,
                     triple,
                     node_dict,
                     rel_dict,
-                    k_hops=k_hops
+                    k_hops=k_hops,
+                    edge_map=edge_map
                 )
                 
                 print(f"  Found {explanation_data['num_paths_found']} connecting paths")
@@ -1017,7 +1112,8 @@ def explain_triples(model: RGCNDistMultModel,
                     node_dict,
                     rel_dict,
                     save_path,
-                    k_hops=k_hops
+                    k_hops=k_hops,
+                    edge_map=edge_map
                 )
                 print(f"  ✓ Saved to {save_path}")
                 successful += 1
@@ -1079,6 +1175,8 @@ def main():
                        help='Path to node dictionary file')
     parser.add_argument('--rel_dict', type=str, default='rel_dict',
                        help='Path to relation dictionary file')
+    parser.add_argument('--edge_map', type=str, default='edge_map.json',
+                       help='Path to edge mapping JSON file')
     parser.add_argument('--train_file', type=str, default='robo_train.txt',
                        help='Path to training triples file')
     parser.add_argument('--val_file', type=str, default='robo_val.txt',
@@ -1120,7 +1218,7 @@ def main():
     print("\n" + "="*50)
     print("Loading data...")
     print("="*50)
-    data_loader = KGDataLoader(args.node_dict, args.rel_dict)
+    data_loader = KGDataLoader(args.node_dict, args.rel_dict, args.edge_map)
     
     train_triples = data_loader.load_triples(args.train_file)
     val_triples = data_loader.load_triples(args.val_file)
@@ -1221,7 +1319,8 @@ def main():
             k_hops=args.explanation_khops,
             use_simple_explanation=args.use_simple_explanation,
             use_perturbation=args.use_perturbation,
-            max_edges=args.max_edges
+            max_edges=args.max_edges,
+            edge_map=data_loader.edge_map
         )
         
         # Save explanations

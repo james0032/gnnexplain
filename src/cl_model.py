@@ -416,15 +416,6 @@ def visualize_explanation(explanation_data: Dict,
                          k_hops: int = 2):
     """
     Visualize explanation subgraph and save as figure.
-    
-    Args:
-        explanation_data: Dictionary containing triple and masks
-        edge_index: Full graph edge indices
-        edge_type: Full graph edge types
-        node_dict: Node to index mapping
-        rel_dict: Relation to index mapping
-        save_path: Path to save the figure
-        k_hops: Number of hops for subgraph extraction
     """
     triple = explanation_data['triple']
     edge_mask = explanation_data.get('edge_mask')
@@ -448,9 +439,26 @@ def visualize_explanation(explanation_data: Dict,
     # Get edge types for subgraph
     sub_edge_type = edge_type[edge_mask_sub]
     
-    # Get explanation scores for subgraph edges if available
+    # Get explanation scores for subgraph edges
     if edge_mask is not None:
-        explanation_scores = edge_mask[edge_mask_sub].cpu().numpy()
+        # FIX: edge_mask is already for the subgraph, not the full graph
+        if isinstance(edge_mask, np.ndarray):
+            explanation_scores = edge_mask
+        elif isinstance(edge_mask, torch.Tensor):
+            explanation_scores = edge_mask.cpu().numpy()
+        else:
+            explanation_scores = np.array(edge_mask)
+        
+        # Check if sizes match
+        if len(explanation_scores) != sub_edge_index.shape[1]:
+            print(f"  Warning: edge_mask size ({len(explanation_scores)}) != subgraph edges ({sub_edge_index.shape[1]})")
+            # If they match the original subgraph size, use as-is
+            # Otherwise, default to uniform scores
+            if len(explanation_scores) == sub_edge_index.shape[1]:
+                pass  # Use as-is
+            else:
+                print(f"  Using uniform edge scores")
+                explanation_scores = np.ones(sub_edge_index.shape[1])
     else:
         explanation_scores = np.ones(sub_edge_index.shape[1])
     
@@ -458,7 +466,7 @@ def visualize_explanation(explanation_data: Dict,
     if explanation_scores.max() > explanation_scores.min():
         explanation_scores = (explanation_scores - explanation_scores.min()) / \
                            (explanation_scores.max() - explanation_scores.min())
-    
+     
     # Create NetworkX graph
     G = nx.DiGraph()
     
@@ -712,14 +720,16 @@ def link_prediction_explainer(model, edge_index, edge_type, triple,
     """
     from torch_geometric.utils import k_hop_subgraph
     
-    head_idx, rel_idx, tail_idx = triple
+    head_idx = triple[0].item()
+    rel_idx = triple[1].item()
+    tail_idx = triple[2].item()
     
     # Get original prediction score
     model.eval()
     with torch.no_grad():
         original_score = model(edge_index, edge_type,
-                              triple[0:1].to(device),
-                              triple[2:3].to(device),
+                              triple[0:1].to(device), 
+                              triple[2:3].to(device), 
                               triple[1:2].to(device))
     
     # Extract k-hop subgraph around triple
@@ -751,18 +761,26 @@ def link_prediction_explainer(model, edge_index, edge_type, triple,
             masked_edge_type = edge_type[mask]
             
             new_score = model(masked_edge_index, masked_edge_type,
-                            triple[0:1], triple[2:3], triple[1:2])
+                            triple[0:1].to(device), 
+                            triple[2:3].to(device), 
+                            triple[1:2].to(device))
         
         # Importance = change in prediction
         importance = abs(original_score.item() - new_score.item())
         importance_scores.append(importance)
-    
-        if (i + 1) % 100 == 0:
+        
+        if (i + 1) % 50 == 0:
             print(f"    Processed {i+1}/{len(original_edge_indices)} edges...")
+    
     # Normalize scores
     importance_scores = np.array(importance_scores)
     if importance_scores.max() > 0:
         importance_scores = importance_scores / importance_scores.max()
+    
+    # NEW: Create full-graph edge mask
+    full_edge_mask = np.zeros(edge_index.shape[1])
+    for i, edge_idx in enumerate(original_edge_indices):
+        full_edge_mask[edge_idx] = importance_scores[i]
     
     # Create explanation dict
     idx_to_node = {v: k for k, v in node_dict.items()}
@@ -794,7 +812,7 @@ def link_prediction_explainer(model, edge_index, edge_type, triple,
         'tail': idx_to_node.get(tail_idx, f"Node_{tail_idx}"),
         'original_score': float(original_score.item()),
         'important_edges': important_edges,
-        'edge_mask': importance_scores
+        'edge_mask': torch.tensor(full_edge_mask)  # Full graph mask
     }
     
     return explanation

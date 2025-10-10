@@ -1041,8 +1041,7 @@ def explain_triples(model: RGCNDistMultModel,
                     device,
                     k_hops=k_hops,
                     max_edges=max_edges,
-                    edge_map=edge_map,
-                    top_k_edges=top_k_edges
+                    edge_map=edge_map
                 )
                 
                 # CHECK: Handle None return (skipped)
@@ -1067,7 +1066,8 @@ def explain_triples(model: RGCNDistMultModel,
                     rel_dict,
                     save_path,
                     k_hops=k_hops,
-                    edge_map=edge_map
+                    edge_map=edge_map,
+                    top_k_edges=top_k_edges
                 )
                 print(f"  ✓ Saved to {save_path}")
                 successful += 1

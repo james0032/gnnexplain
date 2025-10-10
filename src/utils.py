@@ -95,3 +95,34 @@ def generate_negative_samples(positive_triples: torch.Tensor,
     
     return torch.cat(negatives, dim=0)
 
+def load_id_to_name_map(map_path: str) -> Dict[str, str]:
+    """
+    Load ID to name mapping from file.
+    
+    Args:
+        map_path: Path to id_to_name.map file (TSV format: id\tname)
+    
+    Returns:
+        Dictionary mapping node ID to readable name
+    """
+    id_to_name = {}
+    
+    try:
+        with open(map_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                parts = line.strip().split('\t')
+                if len(parts) >= 2:
+                    node_id = parts[0]
+                    node_name = '\t'.join(parts[1:])  # In case name contains tabs
+                    id_to_name[node_id] = node_name
+    
+    except FileNotFoundError:
+        print(f"Warning: {map_path} not found. Using node IDs as labels.")
+        return {}
+    except Exception as e:
+        print(f"Warning: Error loading {map_path}: {e}. Using node IDs as labels.")
+        return {}
+    
+    print(f"Loaded {len(id_to_name)} node name mappings")
+    
+    return id_to_name

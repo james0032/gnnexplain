@@ -556,7 +556,7 @@ def main():
                        help='Number of hops for explanation subgraph')
     parser.add_argument('--top_k_edges', type=int, default=20,
                        help='Maximum edges to display in visualization')
-    parser.add_argument('--max_edges', type=int, default=2000,
+    parser.add_argument('--max_edges', type=int, default=20000,
                        help='Maximum edges for perturbation explainer')
     parser.add_argument('--use_fast_explainer', action='store_true', default=True,
                        help='Use fast GPU-accelerated explainer (default: True)')

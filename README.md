@@ -13,6 +13,30 @@ This project provides:
    - **Perturbation-based**: Identifies important edges via GPU-accelerated edge removal analysis
 4. **Visualization**: Beautiful graph visualizations with importance scores
 
+## 📊 Workflow
+
+```mermaid
+flowchart LR
+    A[Training<br/>cl_model.py<br/>RGCN + DistMult] --> B[best_model.pt]
+    B --> C[Evaluation<br/>cl_eval.py<br/>Accuracy, MRR, Hit@K]
+    C --> D[Explanation<br/>cl_eval.py<br/>Select test triples]
+    D --> E1[Path Explainer<br/>explainers.py<br/>BFS paths]
+    D --> E2[Perturbation Explainer<br/>explainers.py<br/>Edge importance]
+    E1 --> F[Visualization<br/>visualize_explanation.py<br/>NetworkX + Matplotlib]
+    E2 --> F
+    F --> G1[path_explanation_*.png]
+    F --> G2[perturbation_explanation_*.png]
+
+    style A fill:#ffebee
+    style C fill:#e8f5e9
+    style D fill:#fff9c4
+    style E1 fill:#e3f2fd
+    style E2 fill:#e3f2fd
+    style F fill:#f3e5f5
+    style G1 fill:#fce4ec
+    style G2 fill:#fce4ec
+```
+
 ## 🚀 Quick Start
 
 ### 1. Train a Model

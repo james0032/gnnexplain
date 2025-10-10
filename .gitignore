@@ -1,7 +1,7 @@
 .DS_Store
 
 # Large figure files
-figures/CCDD_GNNDistMult_perturb/*.png
+#figures/CCDD_GNNDistMult_perturb/*.png
 figures/RGCN_closer_look.png
 *.pkl
 explanations/

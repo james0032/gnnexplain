@@ -623,7 +623,7 @@ def main():
                        help='Use simple path-based explanation instead of GNNExplainer')
     parser.add_argument('--use_perturbation', action='store_true', 
                    help='Use edge perturbation explainer (slower but shows importance scores)')
-    parser.add_argument('--max_edges', type=int, default=2000, 
+    parser.add_argument('--max_edges', type=int, default=20000, 
                    help='Maximum edges for perturbation explainer (skip triples with more edges)')
     
     # NEW: Prefix filtering

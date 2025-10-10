@@ -65,7 +65,7 @@ def link_prediction_explainer(model, edge_index, edge_type, triple,
 
         with torch.no_grad():
             importance_scores = []
-            batch_size = 50  # Process 50 edges at a time
+            batch_size = 500  # Process 50 edges at a time
 
             for batch_start in range(0, num_edges_to_test, batch_size):
                 batch_end = min(batch_start + batch_size, num_edges_to_test)

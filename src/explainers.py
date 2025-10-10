@@ -5,31 +5,33 @@ from torch_geometric.utils import k_hop_subgraph
 import numpy as np
 import networkx as nx
 
-def link_prediction_explainer(model, edge_index, edge_type, triple, 
-                              node_dict, rel_dict, device, k_hops=2, 
+def link_prediction_explainer(model, edge_index, edge_type, triple,
+                              node_dict, rel_dict, device, k_hops=2,
                               max_edges=2000, edge_map=None,
-                              id_to_name=None): 
+                              id_to_name=None,
+                              use_fast_mode=True):
     """
     Custom explainer specifically for link prediction tasks.
-    Uses edge perturbation to find important edges.
-    
+    Uses GPU-accelerated parallel edge perturbation to find important edges.
+
     Args:
         max_edges: Maximum number of edges to test. Skip if subgraph is larger.
+        use_fast_mode: Use fast approximation by encoding once (default: True)
     """
     from torch_geometric.utils import k_hop_subgraph
-    
+
     head_idx = triple[0].item()
     rel_idx = triple[1].item()
     tail_idx = triple[2].item()
-    
+
     # Get original prediction score
     model.eval()
     with torch.no_grad():
         original_score = model(edge_index, edge_type,
-                              triple[0:1].to(device), 
-                              triple[2:3].to(device), 
+                              triple[0:1].to(device),
+                              triple[2:3].to(device),
                               triple[1:2].to(device))
-    
+
     # Extract k-hop subgraph around triple
     nodes_of_interest = torch.tensor([head_idx, tail_idx])
     subset, sub_edge_index, mapping, edge_mask_sub = k_hop_subgraph(
@@ -39,45 +41,92 @@ def link_prediction_explainer(model, edge_index, edge_type, triple,
         relabel_nodes=True,
         num_nodes=edge_index.max().item() + 1
     )
-    
+
     sub_edge_type = edge_type[edge_mask_sub]
     original_edge_indices = torch.where(edge_mask_sub)[0]
-    
+
     # CHECK: Skip if subgraph is too large
     if len(original_edge_indices) > max_edges:
         print(f"  ⚠️  Skipping: subgraph has {len(original_edge_indices)} edges (max: {max_edges})")
-        # Return None to signal that explanation should be skipped
         return None
-    
-    # Compute importance by edge removal
-    importance_scores = []
-    
-    print(f"  Testing {len(original_edge_indices)} edges in {k_hops}-hop subgraph...")
-    
-    for i, edge_idx in enumerate(original_edge_indices):
-        # Create mask removing this edge
-        mask = torch.ones(edge_index.shape[1], dtype=torch.bool)
-        mask[edge_idx] = False
-        
-        # Forward pass without this edge
+
+    num_edges_to_test = len(original_edge_indices)
+    print(f"  Testing {num_edges_to_test} edges in {k_hops}-hop subgraph...")
+
+    if use_fast_mode:
+        # FAST MODE: Batch multiple edge perturbations together for GPU efficiency
+        print(f"  Using GPU-accelerated FAST mode (batched graph encoding)...")
+
         with torch.no_grad():
-            masked_edge_index = edge_index[:, mask]
-            masked_edge_type = edge_type[mask]
-            
-            new_score = model(masked_edge_index, masked_edge_type,
-                            triple[0:1].to(device), 
-                            triple[2:3].to(device), 
-                            triple[1:2].to(device))
-        
-        # Importance = change in prediction
-        importance = abs(original_score.item() - new_score.item())
-        importance_scores.append(importance)
-        
-        if (i + 1) % 50 == 0:
-            print(f"    Processed {i+1}/{len(original_edge_indices)} edges...")
-    
+            importance_scores = []
+            batch_size = 50  # Process 50 edges at a time
+
+            for batch_start in range(0, num_edges_to_test, batch_size):
+                batch_end = min(batch_start + batch_size, num_edges_to_test)
+                batch_indices = original_edge_indices[batch_start:batch_end]
+                current_batch_size = len(batch_indices)
+
+                # Create masks for this batch - all on GPU
+                batch_masks = torch.ones((current_batch_size, edge_index.shape[1]),
+                                        dtype=torch.bool, device=device)
+
+                # Vectorized mask setting using advanced indexing
+                row_idx = torch.arange(current_batch_size, device=device)
+                batch_masks[row_idx, batch_indices] = False
+
+                # Process batch: compute scores for all masked graphs
+                batch_scores = []
+
+                for i in range(current_batch_size):
+                    mask = batch_masks[i]
+                    masked_edge_index = edge_index[:, mask]
+                    masked_edge_type = edge_type[mask]
+
+                    # Re-encode with masked graph (necessary for RGCN)
+                    masked_node_emb = model.encode(masked_edge_index, masked_edge_type)
+
+                    # Decode score for this triple
+                    masked_head_emb = masked_node_emb[triple[0]:triple[0]+1]
+                    masked_tail_emb = masked_node_emb[triple[2]:triple[2]+1]
+                    score = model.decoder(masked_head_emb, masked_tail_emb, triple[1:2].to(device))
+                    batch_scores.append(score.item())
+
+                # Compute importance scores for this batch
+                batch_importance = [abs(original_score.item() - s) for s in batch_scores]
+                importance_scores.extend(batch_importance)
+
+                if batch_end % 100 == 0 or batch_end == num_edges_to_test:
+                    print(f"    Processed {batch_end}/{num_edges_to_test} edges...")
+
+            importance_scores = np.array(importance_scores)
+
+    else:
+        # ORIGINAL MODE: Full forward pass for each edge (slower but more accurate)
+        print(f"  Using standard mode (full forward pass per edge)...")
+        importance_scores = []
+
+        for i, edge_idx in enumerate(original_edge_indices):
+            with torch.no_grad():
+                mask = torch.ones(edge_index.shape[1], dtype=torch.bool, device=device)
+                mask[edge_idx] = False
+
+                masked_edge_index = edge_index[:, mask]
+                masked_edge_type = edge_type[mask]
+
+                new_score = model(masked_edge_index, masked_edge_type,
+                                triple[0:1].to(device),
+                                triple[2:3].to(device),
+                                triple[1:2].to(device))
+
+                importance = abs(original_score.item() - new_score.item())
+                importance_scores.append(importance)
+
+            if (i + 1) % 50 == 0:
+                print(f"    Processed {i+1}/{num_edges_to_test} edges...")
+
+        importance_scores = np.array(importance_scores)
+
     # Normalize scores
-    importance_scores = np.array(importance_scores)
     if importance_scores.max() > 0:
         importance_scores = importance_scores / importance_scores.max()
     

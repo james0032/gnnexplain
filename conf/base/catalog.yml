@@ -1,0 +1,130 @@
+# Catalog configuration for GNN Explainer Pipeline
+# This file specifies all data inputs and outputs
+
+# =============================================================================
+# Raw Input Data (01_raw)
+# =============================================================================
+# Note: File paths are defined in parameters.yml
+# The data_preparation pipeline loads them directly
+
+edge_map:
+  type: json.JSONDataset
+  filepath: data/01_raw/edge_map.json
+
+id_to_name_map:
+  type: pickle.PickleDataset
+  filepath: data/01_raw/id_to_name.map
+
+# =============================================================================
+# Intermediate Data (02_intermediate)
+# =============================================================================
+
+raw_triple_data:
+  type: MemoryDataset
+  copy_mode: assign
+
+dictionaries:
+  type: MemoryDataset
+  copy_mode: assign
+
+triple_tensors:
+  type: MemoryDataset
+  copy_mode: assign
+
+knowledge_graph:
+  type: pickle.PickleDataset
+  filepath: data/02_intermediate/knowledge_graph.pkl
+
+pyg_data:
+  type: pickle.PickleDataset
+  filepath: data/02_intermediate/pyg_data.pkl
+
+negative_samples:
+  type: pickle.PickleDataset
+  filepath: data/02_intermediate/negative_samples.pkl
+
+# =============================================================================
+# Models (06_models)
+# =============================================================================
+
+trained_model_artifact:
+  type: pickle.PickleDataset
+  filepath: data/06_models/trained_model.pkl
+  backend: pickle
+
+loaded_model:
+  type: MemoryDataset
+  copy_mode: assign
+
+trained_model:
+  type: pickle.PickleDataset
+  filepath: data/06_models/trained_model.pkl
+  backend: pickle
+
+# =============================================================================
+# Explanation Data (05_model_explanations)
+# =============================================================================
+
+prepared_model:
+  type: MemoryDataset
+  copy_mode: assign
+
+selected_triples:
+  type: pickle.PickleDataset
+  filepath: data/05_model_explanations/selected_triples.pkl
+
+gnn_explanations:
+  type: pickle.PickleDataset
+  filepath: data/05_model_explanations/gnn_explanations.pkl
+
+pg_explanations:
+  type: pickle.PickleDataset
+  filepath: data/05_model_explanations/pg_explanations.pkl
+
+explanation_summary:
+  type: pickle.PickleDataset
+  filepath: data/05_model_explanations/explanation_summary.pkl
+
+# =============================================================================
+# Model Outputs (07_model_output)
+# =============================================================================
+
+accuracy_metric:
+  type: pickle.PickleDataset
+  filepath: data/07_model_output/accuracy.pkl
+
+mrr_metric:
+  type: pickle.PickleDataset
+  filepath: data/07_model_output/mrr.pkl
+
+hits_metrics:
+  type: pickle.PickleDataset
+  filepath: data/07_model_output/hits.pkl
+
+evaluation_report:
+  type: pickle.PickleDataset
+  filepath: data/07_model_output/evaluation_report.pkl
+
+filtered_test_triples:
+  type: pickle.PickleDataset
+  filepath: data/07_model_output/filtered_test_triples.pkl
+
+path_explanations:
+  type: pickle.PickleDataset
+  filepath: data/07_model_output/path_explanations.pkl
+
+perturbation_explanations:
+  type: pickle.PickleDataset
+  filepath: data/07_model_output/perturbation_explanations.pkl
+
+# =============================================================================
+# Reporting (08_reporting)
+# =============================================================================
+
+visualization_results:
+  type: json.JSONDataset
+  filepath: data/08_reporting/visualization_results.json
+
+final_report:
+  type: pickle.PickleDataset
+  filepath: data/08_reporting/final_report.pkl

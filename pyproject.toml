@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gnn_explainer"
+readme = "README.md"
+dynamic = ["version"]
+requires-python = ">=3.9"
+dependencies = [
+    "kedro~=0.19.10",
+    "kedro-datasets[pandas-csvdataset, pickle-pickledataset]>=3.0",
+    "kedro-viz>=6.7.0",
+    "torch>=2.0.0",
+    "torch-geometric>=2.3.0",
+    "networkx>=3.0",
+    "matplotlib>=3.5.0",
+    "numpy>=1.24.0",
+    "pandas>=2.0.0",
+    "scikit-learn>=1.3.0",
+]
+
+[project.scripts]
+gnn-explainer = "gnn_explainer.__main__:main"
+
+[project.entry-points."kedro.hooks"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.2",
+    "pytest-cov>=3.0",
+    "pytest-mock>=1.7.1",
+    "ruff>=0.1.8",
+    "ipython>=8.10",
+    "jupyterlab>=3.0",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "gnn_explainer.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = false
+
+[tool.kedro]
+package_name = "gnn_explainer"
+project_name = "GNN Explainer"
+kedro_init_version = "0.19.10"
+tools = ['Linting', 'Testing', 'Custom Logging', 'Documentation', 'Data Structure', 'Kedro Viz']
+example_pipeline = "False"
+source_dir = "src"
+
+[tool.ruff]
+line-length = 88
+show-fixes = true
+select = [
+    "F",   # Pyflakes
+    "W",   # pycodestyle
+    "E",   # pycodestyle
+    "I",   # isort
+    "UP",  # pyupgrade
+    "PL",  # Pylint
+    "T201", # Print Statement
+]
+ignore = ["E501"]  # Black takes care of line-too-long

@@ -1,0 +1,97 @@
+# =============================================================================
+# GNN Explainer Pipeline Parameters
+# =============================================================================
+
+# Data paths (relative to project root)
+data:
+  train_file: "data/01_raw/robo_train.txt"
+  val_file: "data/01_raw/robo_val.txt"
+  test_file: "data/01_raw/robo_test.txt"
+  node_dict: "data/01_raw/node_dict"
+  rel_dict: "data/01_raw/rel_dict"
+
+# Model architecture hyperparameters
+model:
+  # Model selection
+  model_type: "compgcn"          # Options: "rgcn", "compgcn"
+  decoder_type: "complex"        # Options: "distmult", "complex", "rotate", "conve"
+
+  # Common parameters
+  embedding_dim: 200             # Embedding dimension (200 for ComplEx/RotatE/ConvE, 128 for DistMult)
+  num_layers: 2                  # Number of GNN layers
+  dropout: 0.2                   # Dropout rate
+
+  # RGCN-specific parameters
+  num_bases: 30                  # Number of bases (RGCN only)
+
+  # CompGCN-specific parameters
+  comp_fn: "sub"                 # Composition function: "sub", "mult", "corr"
+
+  # ConvE-specific parameters (only used when decoder_type="conve")
+  conve_input_drop: 0.2          # Input dropout
+  conve_hidden_drop: 0.3         # Hidden layer dropout
+  conve_feature_drop: 0.2        # Feature dropout
+  conve_num_filters: 32          # Number of conv filters
+  conve_kernel_size: 3           # Kernel size for convolution
+
+# Training configuration
+training:
+  learning_rate: 0.001
+  batch_size: 2048
+  num_epochs: 100
+  patience: 10
+  weight_decay: 0.0
+  gradient_clip: 1.0
+
+# Evaluation settings
+evaluation:
+  num_neg_samples: 1000
+  hit_k_values: [1, 3, 10]
+  compute_mrr: true
+  compute_hits: true
+  batch_size: 1024
+
+# Explanation settings
+explanation:
+  # Triple selection parameters
+  triple_selection:
+    strategy: "random"                    # Options: "random", "specific_relations", "specific_nodes"
+    num_triples: 10                       # Number of triples to explain
+    target_relations: [0, 1]              # For "specific_relations" strategy
+    target_nodes: []                      # For "specific_nodes" strategy
+
+  # GNNExplainer parameters
+  gnnexplainer:
+    gnn_epochs: 200                       # Optimization epochs for each explanation
+    gnn_lr: 0.01                          # Learning rate for mask optimization
+    top_k_edges: 10                       # Number of top important edges to extract
+
+  # PGExplainer parameters
+  pgexplainer:
+    pg_epochs: 30                         # Training epochs for explainer network
+    pg_lr: 0.003                          # Learning rate for explainer network
+    training_edges: 100                   # Number of edges to train explainer on
+    top_k_edges: 10                       # Number of top important edges to extract
+
+  # Legacy explanation settings (for old explanation pipeline)
+  num_explain: 20
+  subject_prefixes: ["CHEBI", "UNII", "PUBCHEM.COMPOUND"]
+  object_prefixes: ["MONDO"]
+  no_prefix_filter: false
+  use_fast_explainer: true
+  explanation_khops: 2
+  max_edges: 2000
+  max_path_length: 3
+
+# Visualization settings
+visualization:
+  explanation_dir: "data/08_reporting/explanations"
+  top_k_edges: 20
+  figure_size: [15, 10]
+  dpi: 300
+  node_size: 3000
+  font_size: 8
+  edge_font_size: 6
+
+# Device configuration
+device: "cuda"  # Options: "cuda", "cpu", "mps" (for Mac M1/M2)

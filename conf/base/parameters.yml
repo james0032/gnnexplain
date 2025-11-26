@@ -73,6 +73,22 @@ explanation:
     training_edges: 100                   # Number of edges to train explainer on
     top_k_edges: 10                       # Number of top important edges to extract
 
+  # PAGE parameters (Improved Parametric Generative Explainer)
+  # Uses CompGCN embeddings + Prediction-aware training
+  page:
+    train_epochs: 100                     # Training epochs for VGAE
+    lr: 0.003                             # Learning rate
+    k_hops: 2                             # Number of hops for subgraph extraction
+    encoder_hidden1: 32                   # Encoder hidden layer 1 dimensions
+    encoder_hidden2: 16                   # Encoder hidden layer 2 dimensions (unused in improved version)
+    latent_dim: 16                        # Latent space dimensions
+    decoder_hidden1: 16                   # Decoder hidden layer 1 dimensions
+    decoder_hidden2: 16                   # Decoder hidden layer 2 dimensions (unused in improved version)
+    dropout: 0.0                          # Dropout rate
+    kl_weight: 0.2                        # Weight for KL divergence loss
+    prediction_weight: 1.0                # Weight for prediction-aware training (NEW!)
+    top_k_edges: 10                       # Number of top important edges to extract
+
   # Legacy explanation settings (for old explanation pipeline)
   num_explain: 20
   subject_prefixes: ["CHEBI", "UNII", "PUBCHEM.COMPOUND"]

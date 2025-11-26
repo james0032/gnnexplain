@@ -6,6 +6,7 @@ from .nodes import (
     select_triples_to_explain,
     run_gnnexplainer,
     run_pgexplainer,
+    run_page_explainer,
     summarize_explanations
 )
 
@@ -19,7 +20,8 @@ def create_pipeline(**kwargs) -> Pipeline:
     2. Selects triples (edges) to explain
     3. Runs GNNExplainer to generate explanations
     4. Runs PGExplainer to generate explanations
-    5. Summarizes and compares explanations
+    5. Runs PAGE explainer to generate explanations
+    6. Summarizes and compares explanations
 
     Returns:
         Kedro Pipeline
@@ -75,13 +77,27 @@ def create_pipeline(**kwargs) -> Pipeline:
             name="run_pgexplainer"
         ),
 
-        # Step 5: Summarize explanations
+        # Step 5: Run PAGE Explainer
+        node(
+            func=run_page_explainer,
+            inputs=[
+                "prepared_model",
+                "selected_triples",
+                "pyg_data",
+                "params:explanation.page"
+            ],
+            outputs="page_explanations",
+            name="run_page_explainer"
+        ),
+
+        # Step 6: Summarize explanations
         node(
             func=summarize_explanations,
             inputs=[
                 "gnn_explanations",
                 "pg_explanations",
-                "knowledge_graph"
+                "knowledge_graph",
+                "page_explanations"
             ],
             outputs="explanation_summary",
             name="summarize_explanations"

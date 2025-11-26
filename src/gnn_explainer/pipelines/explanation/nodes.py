@@ -548,10 +548,257 @@ def run_pgexplainer(
     }
 
 
+def run_page_explainer(
+    model_dict: Dict,
+    selected_triples: Dict,
+    pyg_data: Dict,
+    explainer_params: Dict
+) -> Dict:
+    """
+    Run Improved PAGE (Parametric Generative Explainer) on selected triples.
+
+    This improved version:
+    1. Uses frozen CompGCN encoder embeddings (model-aware)
+    2. Prediction-aware training (weighted by model scores)
+    3. Explains: "Why did CompGCN predict this triple?"
+
+    Args:
+        model_dict: Dictionary with wrapped model and graph data
+        selected_triples: Selected triples to explain
+        pyg_data: Full graph data for training PAGE
+        explainer_params: PAGE configuration
+
+    Returns:
+        Dictionary with explanations
+    """
+    print("\n" + "="*60)
+    print("RUNNING Improved PAGE Explainer")
+    print("="*60)
+    print("Using: CompGCN features + Prediction-aware training")
+
+    device = model_dict['device']
+    edge_index = model_dict['edge_index']
+    edge_type = model_dict['edge_type']
+    num_nodes = model_dict['num_nodes']
+    trained_model = model_dict['model']
+
+    # Import improved PAGE components
+    from .page_improved import ImprovedPAGEExplainer, extract_link_subgraph
+
+    # PAGE configuration
+    train_epochs = explainer_params.get('train_epochs', 100)
+    lr = explainer_params.get('lr', 0.003)
+    k_hops = explainer_params.get('k_hops', 2)
+    hidden_dim = explainer_params.get('encoder_hidden1', 32)
+    latent_dim = explainer_params.get('latent_dim', 16)
+    prediction_weight = explainer_params.get('prediction_weight', 1.0)
+
+    print(f"\nImproved PAGE configuration:")
+    print(f"  Training epochs: {train_epochs}")
+    print(f"  Learning rate: {lr}")
+    print(f"  K-hops: {k_hops}")
+    print(f"  Latent dim: {latent_dim}")
+    print(f"  Prediction weight: {prediction_weight}")
+    print(f"  Using CompGCN embeddings: {trained_model.embedding_dim}D")
+
+    # Initialize Improved PAGE explainer
+    # Uses CompGCN embedding dimension as input
+    page_explainer = ImprovedPAGEExplainer(
+        compgcn_model=trained_model,
+        edge_index=edge_index,
+        edge_type=edge_type,
+        embedding_dim=trained_model.embedding_dim,
+        hidden_dim=hidden_dim,
+        latent_dim=latent_dim,
+        decoder_hidden_dim=explainer_params.get('decoder_hidden1', 16),
+        dropout=explainer_params.get('dropout', 0.0),
+        device=device
+    )
+
+    print(f"\n✓ Improved PAGE explainer initialized (with frozen CompGCN features)")
+
+    # Extract subgraphs for training
+    selected_edge_index = selected_triples['selected_edge_index']
+    selected_edge_type = selected_triples['selected_edge_type']
+    triples_readable = selected_triples['triples_readable']
+
+    print(f"\nExtracting subgraphs with CompGCN features for {len(triples_readable)} triples...")
+
+    subgraphs_data = []
+    subgraph_info = []
+
+    for i in range(len(triples_readable)):
+        head_idx = selected_edge_index[0, i].item()
+        tail_idx = selected_edge_index[1, i].item()
+        rel_idx = selected_edge_type[i].item()
+
+        try:
+            # Extract k-hop subgraph around head and tail
+            subgraph_nodes, subgraph_edges, adj_matrix = extract_link_subgraph(
+                edge_index=edge_index.cpu(),
+                head_idx=head_idx,
+                tail_idx=tail_idx,
+                num_hops=k_hops,
+                num_nodes=num_nodes
+            )
+
+            num_subgraph_nodes = len(subgraph_nodes)
+            if num_subgraph_nodes > 0:
+                # Get CompGCN features for subgraph nodes
+                subgraph_features = page_explainer.get_subgraph_features(subgraph_nodes)
+
+                # Add batch dimension
+                x = subgraph_features.unsqueeze(0)  # (1, num_nodes, embedding_dim)
+                adj = adj_matrix.unsqueeze(0)  # (1, num_nodes, num_nodes)
+
+                # Get prediction score from CompGCN
+                prediction_score = page_explainer.get_triple_score(head_idx, tail_idx, rel_idx)
+
+                subgraphs_data.append({
+                    'features': x,
+                    'adj': adj,
+                    'prediction_score': prediction_score
+                })
+
+                subgraph_info.append({
+                    'triple_idx': i,
+                    'num_nodes': num_subgraph_nodes,
+                    'num_edges': subgraph_edges.size(1) if subgraph_edges.numel() > 0 else 0,
+                    'subgraph_nodes': subgraph_nodes,
+                    'subgraph_edges': subgraph_edges,
+                    'prediction_score': prediction_score
+                })
+
+        except Exception as e:
+            print(f"  Warning: Failed to extract subgraph for triple {i}: {e}")
+
+    print(f"✓ Extracted {len(subgraphs_data)} subgraphs with CompGCN features")
+
+    # Show prediction score statistics
+    if subgraphs_data:
+        scores = [d['prediction_score'] for d in subgraphs_data]
+        print(f"\nPrediction scores: min={min(scores):.4f}, max={max(scores):.4f}, mean={sum(scores)/len(scores):.4f}")
+
+    if len(subgraphs_data) == 0:
+        print("✗ No valid subgraphs extracted, cannot train PAGE")
+        return {
+            'explainer_type': 'ImprovedPAGE',
+            'explanations': [],
+            'num_explanations': 0,
+            'params': explainer_params,
+            'error': 'No valid subgraphs extracted'
+        }
+
+    # Train PAGE with prediction-aware loss
+    print(f"\nTraining Improved PAGE on {len(subgraphs_data)} subgraphs...")
+    print(f"  Using prediction-aware training (weight={prediction_weight})")
+    page_explainer.train_on_subgraphs(
+        subgraphs_data=subgraphs_data,
+        epochs=train_epochs,
+        lr=lr,
+        kl_weight=explainer_params.get('kl_weight', 0.2),
+        prediction_weight=prediction_weight,
+        verbose=True
+    )
+
+    print(f"✓ Improved PAGE training completed")
+
+    # Generate explanations
+    print(f"\nGenerating explanations for {len(triples_readable)} triples...")
+
+    explanations = []
+
+    for i, data in enumerate(subgraphs_data):
+        info = subgraph_info[i]
+        triple_idx = info['triple_idx']
+        triple = triples_readable[triple_idx]
+        pred_score = info['prediction_score']
+
+        print(f"\n  [{i+1}/{len(subgraphs_data)}] Explaining: {triple['triple']} (score={pred_score:.4f})")
+
+        try:
+            # Generate explanation using improved PAGE
+            edge_importance, latent_z = page_explainer.explain(data['features'], data['adj'])
+
+            # Extract edge importance scores
+            edge_importance_matrix = edge_importance.squeeze(0).cpu()  # (num_nodes, num_nodes)
+
+            # Get top-k important edges
+            top_k = explainer_params.get('top_k_edges', 10)
+
+            # Flatten and get top-k
+            num_subgraph_nodes = edge_importance_matrix.size(0)
+            importance_flat = edge_importance_matrix.flatten()
+            top_k_actual = min(top_k, importance_flat.numel())
+
+            if top_k_actual > 0:
+                top_k_values, top_k_indices = torch.topk(importance_flat, top_k_actual)
+
+                # Convert flat indices to edge indices
+                top_k_edges_local = torch.stack([
+                    top_k_indices // num_subgraph_nodes,
+                    top_k_indices % num_subgraph_nodes
+                ])
+
+                # Map back to original node indices
+                subgraph_nodes = info['subgraph_nodes']
+                top_k_edges_global = torch.tensor([
+                    [subgraph_nodes[top_k_edges_local[0, j]].item(),
+                     subgraph_nodes[top_k_edges_local[1, j]].item()]
+                    for j in range(top_k_edges_local.size(1))
+                ]).t()
+
+                # Get edge types (approximate - use most common type in subgraph)
+                # This is a simplification since we don't track edge types in subgraph extraction
+                top_k_edge_types = torch.zeros(top_k_actual, dtype=torch.long)
+
+                importance_scores = top_k_values
+
+            else:
+                top_k_edges_global = None
+                top_k_edge_types = None
+                importance_scores = None
+
+            explanations.append({
+                'triple': triple,
+                'edge_importance_matrix': edge_importance_matrix,
+                'important_edges': top_k_edges_global,
+                'important_edge_types': top_k_edge_types,
+                'importance_scores': importance_scores,
+                'subgraph_info': info,
+                'latent_representation': latent_z.squeeze(0).cpu(),
+                'prediction_score': pred_score
+            })
+
+            print(f"    ✓ Explanation generated ({top_k_actual} important edges, pred_score={pred_score:.4f})")
+
+        except Exception as e:
+            print(f"    ✗ Error: {str(e)}")
+            explanations.append({
+                'triple': triple,
+                'error': str(e)
+            })
+
+    print(f"\n✓ Improved PAGE explainer completed: {len(explanations)} explanations generated")
+    print(f"   Uses: CompGCN embeddings + Prediction-aware training")
+
+    return {
+        'explainer_type': 'ImprovedPAGE',
+        'explanations': explanations,
+        'num_explanations': len(explanations),
+        'params': explainer_params,
+        'subgraph_info': subgraph_info,
+        'model_aware': True,
+        'uses_encoder': True,
+        'uses_decoder': True
+    }
+
+
 def summarize_explanations(
     gnn_explanations: Dict,
     pg_explanations: Dict,
-    knowledge_graph: Dict
+    knowledge_graph: Dict,
+    page_explanations: Optional[Dict] = None
 ) -> Dict:
     """
     Summarize and compare explanations from different explainers.
@@ -582,8 +829,18 @@ def summarize_explanations(
         'comparisons': []
     }
 
+    # Add PAGE if available
+    if page_explanations is not None:
+        summary['page_explainer'] = {
+            'num_explanations': page_explanations['num_explanations'],
+            'successful': sum(1 for e in page_explanations['explanations'] if 'error' not in e),
+            'failed': sum(1 for e in page_explanations['explanations'] if 'error' in e)
+        }
+
     print(f"\nGNNExplainer: {summary['gnn_explainer']['successful']}/{summary['gnn_explainer']['num_explanations']} successful")
     print(f"PGExplainer: {summary['pg_explainer']['successful']}/{summary['pg_explainer']['num_explanations']} successful")
+    if page_explanations is not None:
+        print(f"PAGE Explainer: {summary['page_explainer']['successful']}/{summary['page_explainer']['num_explanations']} successful")
 
     # Compare explanations for each triple
     print(f"\nComparing explanations...")

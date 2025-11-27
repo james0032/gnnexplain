@@ -4,6 +4,28 @@
 
 ---
 
+## ⚙️ **Installation**
+
+```bash
+# 1. Create and activate virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# 2. Install the package
+pip install -e .
+
+# 3. Create required conf/local directory (if missing)
+mkdir -p conf/local
+touch conf/local/.gitkeep
+
+# 4. Verify installation
+python validate_improved_page.py
+```
+
+**See**: [INSTALLATION.md](INSTALLATION.md) for detailed installation instructions
+
+---
+
 ## 🚀 **Quick Start**
 
 ```bash

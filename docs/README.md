@@ -9,27 +9,31 @@
 ## 📖 **Quick Navigation**
 
 ### **🚀 Getting Started** (Start here!)
-1. [QUICK_REFERENCE.md](../QUICK_REFERENCE.md) - Quick commands and tips
-2. [INPUT_DATA_REQUIREMENTS.md](INPUT_DATA_REQUIREMENTS.md) - Required input files
-3. [COMPLETE_PIPELINE_OVERVIEW.md](COMPLETE_PIPELINE_OVERVIEW.md) - Complete reference
+1. [INSTALLATION.md](../INSTALLATION.md) - Installation and setup ⭐ **START HERE**
+2. [QUICK_REFERENCE.md](../QUICK_REFERENCE.md) - Quick commands and tips
+3. [INPUT_DATA_REQUIREMENTS.md](INPUT_DATA_REQUIREMENTS.md) - Required input files
+4. [COMPLETE_PIPELINE_OVERVIEW.md](COMPLETE_PIPELINE_OVERVIEW.md) - Complete reference
 
 ### **🏗️ Architecture & Implementation**
-4. [PIPELINE_FLOW_DIAGRAM.md](PIPELINE_FLOW_DIAGRAM.md) - Visual pipeline flow
-5. [MODEL_ARCHITECTURES.md](MODEL_ARCHITECTURES.md) - CompGCN vs RGCN
-6. [COMPGCN_IMPLEMENTATION.md](COMPGCN_IMPLEMENTATION.md) - CompGCN details
+5. [PIPELINE_FLOW_DIAGRAM.md](PIPELINE_FLOW_DIAGRAM.md) - Visual pipeline flow
+6. [MODEL_ARCHITECTURES.md](MODEL_ARCHITECTURES.md) - CompGCN vs RGCN
+7. [COMPGCN_IMPLEMENTATION.md](COMPGCN_IMPLEMENTATION.md) - CompGCN details
 
 ### **🔍 Explainer Methods**
-7. [EXPLANATION_PIPELINE.md](EXPLANATION_PIPELINE.md) - Using explainers
-8. [IMPROVED_PAGE_IMPLEMENTATION.md](IMPROVED_PAGE_IMPLEMENTATION.md) ⭐ - Improved PAGE
-9. [EXPLAINER_ARCHITECTURE_ANALYSIS.md](EXPLAINER_ARCHITECTURE_ANALYSIS.md) - How they work
-10. [PAGE_INTEGRATION_PLAN.md](PAGE_INTEGRATION_PLAN.md) - Integration plan
+8. [EXPLANATION_PIPELINE.md](EXPLANATION_PIPELINE.md) - Using explainers
+9. [IMPROVED_PAGE_IMPLEMENTATION.md](IMPROVED_PAGE_IMPLEMENTATION.md) ⭐ - Improved PAGE
+10. [EXPLAINER_ARCHITECTURE_ANALYSIS.md](EXPLAINER_ARCHITECTURE_ANALYSIS.md) - How they work
+11. [PAGE_INTEGRATION_PLAN.md](PAGE_INTEGRATION_PLAN.md) - Integration plan
 
 ### **📋 Implementation Summary**
-11. [IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md) - Complete summary
+12. [IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md) - Complete summary
 
 ---
 
 ## 📚 **Documentation by Task**
+
+### **"I want to install and set up the environment"**
+→ [INSTALLATION.md](../INSTALLATION.md) for installation ⭐
 
 ### **"I want to run the pipeline"**
 → [QUICK_REFERENCE.md](../QUICK_REFERENCE.md) for commands
@@ -158,9 +162,10 @@ print(page['explanations'][0]['top_edges'])
 ## 🎓 **Learning Path**
 
 ### **Beginner** (Just want to run it)
-1. [INPUT_DATA_REQUIREMENTS.md](INPUT_DATA_REQUIREMENTS.md) - Prepare data
-2. [QUICK_REFERENCE.md](../QUICK_REFERENCE.md) - Run commands
-3. [EXPLANATION_PIPELINE.md](EXPLANATION_PIPELINE.md) - Analyze results
+1. [INSTALLATION.md](../INSTALLATION.md) - Install environment ⭐
+2. [INPUT_DATA_REQUIREMENTS.md](INPUT_DATA_REQUIREMENTS.md) - Prepare data
+3. [QUICK_REFERENCE.md](../QUICK_REFERENCE.md) - Run commands
+4. [EXPLANATION_PIPELINE.md](EXPLANATION_PIPELINE.md) - Analyze results
 
 ### **Intermediate** (Want to understand how it works)
 4. [PIPELINE_FLOW_DIAGRAM.md](PIPELINE_FLOW_DIAGRAM.md) - Visual flow

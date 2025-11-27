@@ -1,3 +1,26 @@
+Metadata-Version: 2.4
+Name: gnn_explainer
+Version: 0.1.0
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: kedro~=0.19.10
+Requires-Dist: kedro-datasets[pandas-csvdataset,pickle-pickledataset]>=3.0
+Requires-Dist: kedro-viz>=6.7.0
+Requires-Dist: torch>=2.0.0
+Requires-Dist: torch-geometric>=2.3.0
+Requires-Dist: networkx>=3.0
+Requires-Dist: matplotlib>=3.5.0
+Requires-Dist: numpy>=1.24.0
+Requires-Dist: pandas>=2.0.0
+Requires-Dist: scikit-learn>=1.3.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.2; extra == "dev"
+Requires-Dist: pytest-cov>=3.0; extra == "dev"
+Requires-Dist: pytest-mock>=1.7.1; extra == "dev"
+Requires-Dist: ruff>=0.1.8; extra == "dev"
+Requires-Dist: ipython>=8.10; extra == "dev"
+Requires-Dist: jupyterlab>=3.0; extra == "dev"
+
 # GNN Explainer - Kedro Pipeline Implementation
 
 This directory contains a Kedro-based implementation of the GNN Explainer pipeline for knowledge graph link prediction and explanation.
@@ -47,19 +70,9 @@ gnnexplain/
 ```bash
 cd /Users/jchung/Documents/RENCI/everycure/experiments/Influence_estimate/gnnexplain
 
-# Create and activate virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
 # Install in development mode
 pip install -e .
-
-# Create required conf/local directory
-mkdir -p conf/local
-touch conf/local/.gitkeep
 ```
-
-**See [INSTALLATION.md](INSTALLATION.md) for detailed installation instructions.**
 
 ### 2. Prepare Data
 
@@ -265,30 +278,15 @@ ruff check src/
 
 ### Common Issues
 
-**Issue**: `pip install -e .` fails
-```bash
-# Solution: Upgrade pip and setuptools
-pip install --upgrade pip setuptools wheel
-pip install -e .
-```
-
-**Issue**: `kedro viz` fails with "MissingConfigException: conf/local"
-```bash
-# Solution: Create the conf/local directory
-mkdir -p conf/local
-touch conf/local/.gitkeep
-```
-
 **Issue**: CUDA out of memory
 ```bash
-# Solution: Reduce batch size or use CPU
-kedro run --params=training.batch_size:1024,device:cpu
+# Solution: Reduce batch size
+kedro run --params=training.batch_size:1024
 ```
 
 **Issue**: Module not found
 ```bash
-# Solution: Ensure you're in the virtual environment
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+# Solution: Reinstall in dev mode
 pip install -e .
 ```
 
@@ -296,10 +294,7 @@ pip install -e .
 ```bash
 # Solution: Check data paths in parameters.yml
 # Ensure data files exist in data/01_raw/
-ls data/01_raw/
 ```
-
-**See [INSTALLATION.md](INSTALLATION.md) for more troubleshooting help.**
 
 ## 📚 Next Steps
 

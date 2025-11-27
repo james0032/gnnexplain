@@ -1,0 +1,2 @@
+[console_scripts]
+gnn-explainer = gnn_explainer.__main__:main

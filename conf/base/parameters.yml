@@ -111,3 +111,17 @@ visualization:
 
 # Device configuration
 device: "cuda"  # Options: "cuda", "cpu", "mps" (for Mac M1/M2)
+
+# =============================================================================
+# MLflow Experiment Tracking Configuration
+# =============================================================================
+# Controls whether MLflow experiment tracking is enabled
+# Set to true to enable MLflow tracking, false to disable (default)
+#
+# Usage:
+#   - Run without MLflow: kedro run
+#   - Run with MLflow: kedro run --params=mlflow.enabled:true
+mlflow:
+  enabled: false                          # Default: disabled (toggle with --params=mlflow.enabled:true)
+  tracking_uri: "mlruns"                  # Local tracking directory or remote server URL
+  experiment_name: "gnn-explainer"        # Experiment name for organizing runs

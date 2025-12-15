@@ -7,6 +7,11 @@ from typing import Dict
 from .model import RGCNDistMultModel
 from .kg_models import CompGCNKGModel
 from ..utils import generate_negative_samples
+from gnn_explainer.utils.mlflow_utils import (
+    log_params_from_dict,
+    log_training_metrics,
+    is_mlflow_enabled,
+)
 
 
 def train_model(
@@ -97,6 +102,11 @@ def train_model(
     # Count parameters
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"  Total parameters: {num_params:,}")
+
+    # Log model parameters to MLflow
+    if is_mlflow_enabled():
+        log_params_from_dict(model_params, prefix="model")
+        log_params_from_dict(training_params, prefix="training")
 
     # Optimizer
     optimizer = optim.Adam(
@@ -212,6 +222,14 @@ def train_model(
                 val_batches += 1
 
         val_loss = val_loss / val_batches
+
+        # Log metrics to MLflow
+        if is_mlflow_enabled():
+            log_training_metrics(
+                epoch=epoch + 1,
+                train_loss=train_loss,
+                val_loss=val_loss,
+            )
 
         # Print progress
         if (epoch + 1) % 10 == 0 or epoch == 0:

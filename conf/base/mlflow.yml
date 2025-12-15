@@ -1,0 +1,82 @@
+# ============================================================================
+# MLflow Experiment Tracking Configuration
+# ============================================================================
+#
+# This file configures MLflow experiment tracking for the GNN Explainer project.
+# MLflow is disabled by default and must be explicitly enabled via parameters.yml
+#
+# Usage:
+#   - To run without MLflow (default): kedro run
+#   - To run with MLflow: kedro run --params=mlflow.enabled:true
+#
+# ============================================================================
+
+# MLflow tracking URI
+# Options:
+#   - "mlruns" (default): Local file-based tracking in ./mlruns directory
+#   - "http://localhost:5000": MLflow tracking server
+#   - "databricks": Databricks workspace
+#   - Custom URI: Any valid MLflow tracking URI
+tracking_uri: "mlruns"
+
+# Experiment name
+# All runs will be logged under this experiment
+experiment_name: "gnn-explainer"
+
+# ============================================================================
+# Autolog Configuration
+# ============================================================================
+# MLflow autolog automatically logs parameters, metrics, and models
+# from supported ML frameworks (PyTorch, TensorFlow, etc.)
+
+autolog:
+  # Enable autolog for PyTorch
+  enabled: true
+
+  # Automatically log trained models
+  log_models: true
+
+  # Log metrics every N epochs
+  log_every_n_epoch: 1
+
+  # Log model checkpoints
+  log_checkpoints: false
+
+# ============================================================================
+# Run Configuration
+# ============================================================================
+
+# Tags to apply to all runs (useful for filtering and organization)
+default_tags:
+  project: "gnn-explainer"
+  framework: "pytorch-geometric"
+
+# ============================================================================
+# Artifact Logging Configuration
+# ============================================================================
+
+artifacts:
+  # Log training curves
+  log_training_curves: true
+
+  # Log evaluation results
+  log_evaluation_results: true
+
+  # Log model explanations
+  log_explanations: true
+
+  # Log figures and plots
+  log_figures: true
+
+# ============================================================================
+# Advanced Configuration
+# ============================================================================
+
+# Nested runs configuration
+# Useful for logging sub-experiments (e.g., hyperparameter tuning)
+nested_runs:
+  enabled: false
+
+# Registry URI for model registry (optional)
+# Leave empty to use the same URI as tracking_uri
+registry_uri: null

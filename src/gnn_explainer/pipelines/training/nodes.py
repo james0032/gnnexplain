@@ -161,7 +161,8 @@ def train_model(
         labels = labels[perm]
 
         # Mini-batch training
-        for i in range(0, len(all_triples), batch_size):
+        total_batches = (len(all_triples) + batch_size - 1) // batch_size
+        for batch_idx, i in enumerate(range(0, len(all_triples), batch_size), 1):
             batch_triples = all_triples[i:i+batch_size].to(device)
             batch_labels = labels[i:i+batch_size]
 
@@ -184,6 +185,11 @@ def train_model(
 
             total_loss += loss.item()
             num_batches += 1
+
+            # Print batch progress every 10 batches or on last batch
+            if batch_idx % 10 == 0 or batch_idx == total_batches:
+                avg_loss = total_loss / num_batches
+                print(f"  Epoch {epoch+1}/{num_epochs} - Batch {batch_idx}/{total_batches} - Avg Loss: {avg_loss:.4f}")
 
         train_loss = total_loss / num_batches
 
@@ -231,11 +237,10 @@ def train_model(
                 val_loss=val_loss,
             )
 
-        # Print progress
-        if (epoch + 1) % 10 == 0 or epoch == 0:
-            print(f"Epoch {epoch+1:3d}/{num_epochs}: "
-                  f"Train Loss = {train_loss:.4f}, "
-                  f"Val Loss = {val_loss:.4f}")
+        # Print progress every epoch
+        print(f"Epoch {epoch+1:3d}/{num_epochs}: "
+              f"Train Loss = {train_loss:.4f}, "
+              f"Val Loss = {val_loss:.4f}")
 
         # Early stopping
         if val_loss < best_val_loss:

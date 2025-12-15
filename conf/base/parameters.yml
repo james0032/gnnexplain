@@ -17,7 +17,7 @@ model:
   decoder_type: "complex"        # Options: "distmult", "complex", "rotate", "conve"
 
   # Common parameters
-  embedding_dim: 200             # Embedding dimension (200 for ComplEx/RotatE/ConvE, 128 for DistMult)
+  embedding_dim: 32             # Embedding dimension (200 for ComplEx/RotatE/ConvE, 128 for DistMult)
   num_layers: 2                  # Number of GNN layers
   dropout: 0.2                   # Dropout rate
 
@@ -37,15 +37,15 @@ model:
 # Training configuration
 training:
   learning_rate: 0.001
-  batch_size: 2048
-  num_epochs: 100
+  batch_size: 32
+  num_epochs: 5
   patience: 10
   weight_decay: 0.0
   gradient_clip: 1.0
 
 # Evaluation settings
 evaluation:
-  num_neg_samples: 1000
+  num_neg_samples: 10
   hit_k_values: [1, 3, 10]
   compute_mrr: true
   compute_hits: true

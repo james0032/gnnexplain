@@ -4,8 +4,13 @@ https://docs.kedro.org/en/stable/kedro_project_setup/settings.html."""
 
 from kedro.config import OmegaConfigLoader
 
+from gnn_explainer.hooks.mlflow_hook import MLflowHook
+
 CONFIG_LOADER_CLASS = OmegaConfigLoader
 CONFIG_LOADER_ARGS = {
     "base_env": "base",
     "default_run_env": "local",
 }
+
+# Register hooks
+HOOKS = (MLflowHook(),)

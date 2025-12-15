@@ -1,0 +1,15 @@
+# Local environment parameter overrides
+# This file overrides data paths to use an external data directory
+#
+# These paths point to data files loaded by the data_preparation pipeline
+
+data:
+  train_file: "/projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/01_raw/robo_train.txt"
+  val_file: "/projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/01_raw/robo_val.txt"
+  test_file: "/projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/01_raw/robo_test.txt"
+  node_dict: "/projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/01_raw/node_dict"
+  rel_dict: "/projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/01_raw/rel_dict"
+
+# Visualization output directory
+visualization:
+  explanation_dir: "/projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/08_reporting/explanations"

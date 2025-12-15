@@ -7,6 +7,8 @@ docs/source/conf.py
 # Kedro local configuration
 conf/local/**
 !conf/local/.gitkeep
+!conf/local/catalog.yml
+!conf/local/parameters.yml
 
 ##########################
 # Common files

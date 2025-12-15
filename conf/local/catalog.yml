@@ -1,0 +1,96 @@
+# Local environment catalog overrides
+# This file overrides data paths to use an external data directory
+#
+# Base data path: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data
+
+# Raw Input Data
+edge_map:
+  type: json.JSONDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/01_raw/edge_map.json
+
+id_to_name_map:
+  type: pickle.PickleDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/01_raw/id_to_name.map
+
+# Intermediate Data
+knowledge_graph:
+  type: pickle.PickleDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/02_intermediate/knowledge_graph.pkl
+
+pyg_data:
+  type: pickle.PickleDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/02_intermediate/pyg_data.pkl
+
+negative_samples:
+  type: pickle.PickleDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/02_intermediate/negative_samples.pkl
+
+# Models
+trained_model_artifact:
+  type: pickle.PickleDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/06_models/trained_model.pkl
+  backend: pickle
+
+trained_model:
+  type: pickle.PickleDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/06_models/trained_model.pkl
+  backend: pickle
+
+# Explanation Data
+selected_triples:
+  type: pickle.PickleDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/05_model_explanations/selected_triples.pkl
+
+gnn_explanations:
+  type: pickle.PickleDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/05_model_explanations/gnn_explanations.pkl
+
+pg_explanations:
+  type: pickle.PickleDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/05_model_explanations/pg_explanations.pkl
+
+page_explanations:
+  type: pickle.PickleDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/05_model_explanations/page_explanations.pkl
+
+explanation_summary:
+  type: pickle.PickleDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/05_model_explanations/explanation_summary.pkl
+
+# Model Outputs
+accuracy_metric:
+  type: pickle.PickleDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/07_model_output/accuracy.pkl
+
+mrr_metric:
+  type: pickle.PickleDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/07_model_output/mrr.pkl
+
+hits_metrics:
+  type: pickle.PickleDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/07_model_output/hits.pkl
+
+evaluation_report:
+  type: pickle.PickleDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/07_model_output/evaluation_report.pkl
+
+filtered_test_triples:
+  type: pickle.PickleDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/07_model_output/filtered_test_triples.pkl
+
+path_explanations:
+  type: pickle.PickleDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/07_model_output/path_explanations.pkl
+
+perturbation_explanations:
+  type: pickle.PickleDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/07_model_output/perturbation_explanations.pkl
+
+# Reporting
+visualization_results:
+  type: json.JSONDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/08_reporting/visualization_results.json
+
+final_report:
+  type: pickle.PickleDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/08_reporting/final_report.pkl

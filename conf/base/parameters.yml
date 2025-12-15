@@ -14,7 +14,7 @@ data:
 model:
   # Model selection
   model_type: "compgcn"          # Options: "rgcn", "compgcn"
-  decoder_type: "complex"        # Options: "distmult", "complex", "rotate", "conve"
+  decoder_type: "conve"        # Options: "distmult", "complex", "rotate", "conve"
 
   # Common parameters
   embedding_dim: 32             # Embedding dimension (200 for ComplEx/RotatE/ConvE, 128 for DistMult)

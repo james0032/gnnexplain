@@ -22,6 +22,6 @@ def create_pipeline(**kwargs) -> Pipeline:
                 "params:device"
             ],
             outputs="trained_model_artifact",
-            name="train_rgcn_distmult",
+            name="train_model",
         ),
     ])

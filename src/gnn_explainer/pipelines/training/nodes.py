@@ -384,19 +384,37 @@ def compute_test_scores(
             if batch_idx % 10 == 0 or batch_idx == num_batches:
                 print(f"  Processed {batch_idx}/{num_batches} batches", flush=True)
 
-    # Convert to tensor
+    # Convert to tensor and apply sigmoid
     all_scores_tensor = torch.tensor(all_scores)
+    sigmoid_scores = torch.sigmoid(all_scores_tensor)
 
     print(f"\n✓ Scoring complete")
     print(f"  Total triples scored: {len(all_scores)}")
-    print(f"  Score range: [{all_scores_tensor.min():.4f}, {all_scores_tensor.max():.4f}]")
-    print(f"  Mean score: {all_scores_tensor.mean():.4f}")
+    print(f"  Raw score range: [{all_scores_tensor.min():.4f}, {all_scores_tensor.max():.4f}]")
+    print(f"  Sigmoid score range: [{sigmoid_scores.min():.4f}, {sigmoid_scores.max():.4f}]")
+    print(f"  Mean sigmoid score: {sigmoid_scores.mean():.4f}")
+
+    # Save CSV file
+    import pandas as pd
+    csv_path = "data/07_model_output/test_triple_scores.csv"
+
+    df = pd.DataFrame({
+        'head': test_triples[:, 0].tolist(),
+        'relation': test_triples[:, 1].tolist(),
+        'tail': test_triples[:, 2].tolist(),
+        'raw_score': all_scores_tensor.tolist(),
+        'sigmoid_score': sigmoid_scores.tolist(),
+    })
+
+    df.to_csv(csv_path, index=False)
+    print(f"\n✓ Saved CSV to: {csv_path}")
 
     print("\n" + "="*60)
 
     return {
         'test_triples': test_triples.cpu(),
         'scores': all_scores_tensor,
+        'sigmoid_scores': sigmoid_scores,
         'model_type': model_type,
         'decoder_type': decoder_type,
     }

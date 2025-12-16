@@ -1,5 +1,6 @@
 """Nodes for training pipeline."""
 
+import logging
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
@@ -12,6 +13,8 @@ from gnn_explainer.utils.mlflow_utils import (
     log_training_metrics,
     is_mlflow_enabled,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def train_model(
@@ -189,7 +192,9 @@ def train_model(
             # Print batch progress every 10 batches or on last batch
             if batch_idx % 10 == 0 or batch_idx == total_batches:
                 avg_loss = total_loss / num_batches
-                print(f"  Epoch {epoch+1}/{num_epochs} - Batch {batch_idx}/{total_batches} - Avg Loss: {avg_loss:.4f}")
+                msg = f"  Epoch {epoch+1}/{num_epochs} - Batch {batch_idx}/{total_batches} - Avg Loss: {avg_loss:.4f}"
+                logger.info(msg)
+                print(msg, flush=True)  # Also print to ensure visibility
 
         train_loss = total_loss / num_batches
 
@@ -238,16 +243,18 @@ def train_model(
             )
 
         # Print progress every epoch
-        print(f"Epoch {epoch+1:3d}/{num_epochs}: "
-              f"Train Loss = {train_loss:.4f}, "
-              f"Val Loss = {val_loss:.4f}")
+        msg = f"Epoch {epoch+1:3d}/{num_epochs}: Train Loss = {train_loss:.4f}, Val Loss = {val_loss:.4f}"
+        logger.info(msg)
+        print(msg, flush=True)
 
         # Early stopping
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_model_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             patience_counter = 0
-            print(f"  ✓ New best model (val_loss: {val_loss:.4f})")
+            msg = f"  ✓ New best model (val_loss: {val_loss:.4f})"
+            logger.info(msg)
+            print(msg, flush=True)
         else:
             patience_counter += 1
 

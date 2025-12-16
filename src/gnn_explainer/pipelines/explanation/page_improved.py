@@ -340,17 +340,17 @@ class ImprovedPAGEExplainer:
                 total_kl += kl_div.item()
                 total_weighted_recon += weighted_recon.item()
 
-            if verbose and (epoch + 1) % 20 == 0:
+            if verbose and (epoch + 1) % 10 == 0:
                 avg_loss = total_loss / len(subgraphs_data)
                 avg_recon = total_recon / len(subgraphs_data)
                 avg_weighted_recon = total_weighted_recon / len(subgraphs_data)
                 avg_kl = total_kl / len(subgraphs_data)
 
-                print(f"  Epoch {epoch+1}/{epochs}: "
+                print(f"  Epoch [{epoch+1}/{epochs}]: "
                       f"Loss={avg_loss:.4f}, "
                       f"Recon={avg_recon:.4f}, "
                       f"WeightedRecon={avg_weighted_recon:.4f}, "
-                      f"KL={avg_kl:.4f}")
+                      f"KL={avg_kl:.4f}", flush=True)
 
     def explain(self, x, adj):
         """

@@ -46,7 +46,8 @@ def create_pipeline(**kwargs) -> Pipeline:
                 "pyg_data",
                 "knowledge_graph",
                 "params:explanation.triple_selection",
-                "params:device"
+                "params:device",
+                "top10_test"  # Optional: file content for "from_file" strategy
             ],
             outputs="selected_triples",
             name="select_triples_to_explain"

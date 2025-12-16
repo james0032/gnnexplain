@@ -160,7 +160,8 @@ def select_triples_to_explain(
     pyg_data: Dict,
     knowledge_graph: Dict,
     selection_params: Dict,
-    device_str: str = "cpu"
+    device_str: str = "cpu",
+    triple_file_content: str = None
 ) -> Dict:
     """
     Select triples (edges) to explain.
@@ -170,6 +171,7 @@ def select_triples_to_explain(
         knowledge_graph: Knowledge graph with dictionaries
         selection_params: Parameters for selecting triples
         device_str: Device string
+        triple_file_content: Optional file content from Kedro catalog (for "from_file" strategy)
 
     Returns:
         Dictionary with selected triple indices and metadata
@@ -261,21 +263,33 @@ def select_triples_to_explain(
             }
 
     elif selection_strategy == 'from_file':
-        # Load triples from a file (e.g., top10_test.txt)
+        # Load triples from Kedro catalog or file
         file_path = selection_params.get('file_path', None)
 
-        if file_path is None:
-            print("Warning: No file_path specified for 'from_file' strategy, falling back to random")
-            indices = torch.randperm(num_edges)[:num_triples]
-        else:
+        # Use content from catalog if available, otherwise read from file
+        if triple_file_content is not None:
+            print(f"Loading triples from Kedro catalog dataset")
+            file_lines = triple_file_content.strip().split('\n') if isinstance(triple_file_content, str) else triple_file_content.splitlines()
+            print(f"Found {len(file_lines)} triples from catalog")
+        elif file_path is not None:
             print(f"Loading triples from file: {file_path}")
-
             try:
                 # Read triples from file (format: head\trelation\ttail)
                 with open(file_path, 'r') as f:
                     file_lines = f.readlines()
-
                 print(f"Found {len(file_lines)} triples in file")
+            except Exception as e:
+                print(f"Error loading file {file_path}: {e}")
+                print("Falling back to random selection")
+                indices = torch.randperm(num_edges)[:num_triples]
+                file_lines = None
+        else:
+            print("Warning: No catalog content or file_path specified for 'from_file' strategy, falling back to random")
+            indices = torch.randperm(num_edges)[:num_triples]
+            file_lines = None
+
+        if file_lines is not None:
+            try:
 
                 # Parse triples and convert to indices
                 idx_to_entity = knowledge_graph.get('idx_to_entity', {})
@@ -513,9 +527,15 @@ def run_gnnexplainer(
     triples_readable = selected_triples['triples_readable']
 
     print(f"\nGenerating explanations for {len(triples_readable)} triples...")
+    print(f"Configuration: {epochs} optimization epochs per triple at lr={lr}")
+
+    import time
+    start_time = time.time()
 
     for i in range(len(triples_readable)):
+        triple_start = time.time()
         print(f"\n  [{i+1}/{len(triples_readable)}] Explaining: {triples_readable[i]['triple']}")
+        print(f"      Optimizing edge mask for {epochs} epochs...", end='', flush=True)
 
         # Get the edge to explain
         edge_to_explain = selected_edge_index[:, i:i+1]
@@ -530,6 +550,9 @@ def run_gnnexplainer(
                 edge_type=edge_type_to_explain,
                 target=edge_to_explain
             )
+
+            triple_time = time.time() - triple_start
+            print(f" Done in {triple_time:.1f}s")
 
             # Extract explanation components
             edge_mask = explanation.edge_mask if hasattr(explanation, 'edge_mask') else None
@@ -556,16 +579,26 @@ def run_gnnexplainer(
                 'importance_scores': importance_scores
             })
 
-            print(f"    ✓ Explanation generated")
-
         except Exception as e:
+            triple_time = time.time() - triple_start
+            print(f" Failed in {triple_time:.1f}s")
             print(f"    ✗ Error: {str(e)}")
             explanations.append({
                 'triple': triples_readable[i],
                 'error': str(e)
             })
 
-    print(f"\n✓ GNNExplainer completed: {len(explanations)} explanations generated")
+        # Show progress estimate
+        if i < len(triples_readable) - 1:
+            avg_time = (time.time() - start_time) / (i + 1)
+            remaining = len(triples_readable) - (i + 1)
+            eta_seconds = avg_time * remaining
+            eta_mins = int(eta_seconds / 60)
+            eta_secs = int(eta_seconds % 60)
+            print(f"      Progress: {i+1}/{len(triples_readable)} done, ETA: {eta_mins}m {eta_secs}s", flush=True)
+
+    total_time = time.time() - start_time
+    print(f"\n✓ GNNExplainer completed: {len(explanations)} explanations generated in {total_time:.1f}s")
 
     return {
         'explainer_type': 'GNNExplainer',
@@ -661,9 +694,15 @@ def run_pgexplainer(
     triples_readable = selected_triples['triples_readable']
 
     print(f"\nGenerating explanations for {len(triples_readable)} triples...")
+    print(f"Configuration: Pre-trained explainer network (no per-triple optimization)")
+
+    import time
+    start_time = time.time()
 
     for i in range(len(triples_readable)):
+        triple_start = time.time()
         print(f"\n  [{i+1}/{len(triples_readable)}] Explaining: {triples_readable[i]['triple']}")
+        print(f"      Generating explanation...", end='', flush=True)
 
         edge_to_explain = selected_edge_index[:, i:i+1]
         edge_type_to_explain = selected_edge_type[i:i+1]
@@ -676,6 +715,9 @@ def run_pgexplainer(
                 edge_type=edge_type_to_explain,
                 target=edge_to_explain
             )
+
+            triple_time = time.time() - triple_start
+            print(f" Done in {triple_time:.1f}s")
 
             # Extract explanation components
             edge_mask = explanation.edge_mask if hasattr(explanation, 'edge_mask') else None
@@ -702,16 +744,26 @@ def run_pgexplainer(
                 'importance_scores': importance_scores
             })
 
-            print(f"    ✓ Explanation generated")
-
         except Exception as e:
+            triple_time = time.time() - triple_start
+            print(f" Failed in {triple_time:.1f}s")
             print(f"    ✗ Error: {str(e)}")
             explanations.append({
                 'triple': triples_readable[i],
                 'error': str(e)
             })
 
-    print(f"\n✓ PGExplainer completed: {len(explanations)} explanations generated")
+        # Show progress estimate
+        if i < len(triples_readable) - 1:
+            avg_time = (time.time() - start_time) / (i + 1)
+            remaining = len(triples_readable) - (i + 1)
+            eta_seconds = avg_time * remaining
+            eta_mins = int(eta_seconds / 60)
+            eta_secs = int(eta_seconds % 60)
+            print(f"      Progress: {i+1}/{len(triples_readable)} done, ETA: {eta_mins}m {eta_secs}s", flush=True)
+
+    total_time = time.time() - start_time
+    print(f"\n✓ PGExplainer completed: {len(explanations)} explanations generated in {total_time:.1f}s")
 
     return {
         'explainer_type': 'PGExplainer',
@@ -879,20 +931,29 @@ def run_page_explainer(
 
     # Generate explanations
     print(f"\nGenerating explanations for {len(triples_readable)} triples...")
+    print(f"Configuration: Using trained VGAE to decode edge importance")
+
+    import time
+    start_time = time.time()
 
     explanations = []
 
     for i, data in enumerate(subgraphs_data):
+        triple_start = time.time()
         info = subgraph_info[i]
         triple_idx = info['triple_idx']
         triple = triples_readable[triple_idx]
         pred_score = info['prediction_score']
 
         print(f"\n  [{i+1}/{len(subgraphs_data)}] Explaining: {triple['triple']} (score={pred_score:.4f})")
+        print(f"      Generating explanation...", end='', flush=True)
 
         try:
             # Generate explanation using improved PAGE
             edge_importance, latent_z = page_explainer.explain(data['features'], data['adj'])
+
+            triple_time = time.time() - triple_start
+            print(f" Done in {triple_time:.1f}s")
 
             # Extract edge importance scores
             edge_importance_matrix = edge_importance.squeeze(0).cpu()  # (num_nodes, num_nodes)
@@ -944,16 +1005,26 @@ def run_page_explainer(
                 'prediction_score': pred_score
             })
 
-            print(f"    ✓ Explanation generated ({top_k_actual} important edges, pred_score={pred_score:.4f})")
-
         except Exception as e:
+            triple_time = time.time() - triple_start
+            print(f" Failed in {triple_time:.1f}s")
             print(f"    ✗ Error: {str(e)}")
             explanations.append({
                 'triple': triple,
                 'error': str(e)
             })
 
-    print(f"\n✓ Improved PAGE explainer completed: {len(explanations)} explanations generated")
+        # Show progress estimate
+        if i < len(subgraphs_data) - 1:
+            avg_time = (time.time() - start_time) / (i + 1)
+            remaining = len(subgraphs_data) - (i + 1)
+            eta_seconds = avg_time * remaining
+            eta_mins = int(eta_seconds / 60)
+            eta_secs = int(eta_seconds % 60)
+            print(f"      Progress: {i+1}/{len(subgraphs_data)} done, ETA: {eta_mins}m {eta_secs}s", flush=True)
+
+    total_time = time.time() - start_time
+    print(f"\n✓ Improved PAGE explainer completed: {len(explanations)} explanations generated in {total_time:.1f}s")
     print(f"   Uses: CompGCN embeddings + Prediction-aware training")
 
     return {

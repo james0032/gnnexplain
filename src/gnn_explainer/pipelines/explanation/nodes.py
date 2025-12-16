@@ -498,8 +498,12 @@ def run_gnnexplainer(
 
     print(f"\n✓ GNNExplainer initialized")
 
-    # Create dummy node features (required by Explainer API)
-    x = torch.eye(num_nodes, device=device)
+    # Create dummy node features (required by Explainer API but not used by KG models)
+    # Since our KG model uses learned embeddings and doesn't use input features,
+    # we create a minimal tensor instead of a massive identity matrix
+    # The Explainer will only extract relevant nodes for subgraphs anyway
+    print(f"\nNote: Using minimal node features (KG model uses learned embeddings)")
+    x = torch.zeros((num_nodes, 1), device=device)  # Minimal features instead of identity matrix
 
     # Run explanation for each selected triple
     explanations = []
@@ -628,8 +632,11 @@ def run_pgexplainer(
 
     print(f"\n✓ PGExplainer initialized")
 
-    # Create dummy node features
-    x = torch.eye(num_nodes, device=device)
+    # Create dummy node features (required by Explainer API but not used by KG models)
+    # Since our KG model uses learned embeddings and doesn't use input features,
+    # we create a minimal tensor instead of a massive identity matrix
+    print(f"\nNote: Using minimal node features (KG model uses learned embeddings)")
+    x = torch.zeros((num_nodes, 1), device=device)  # Minimal features instead of identity matrix
 
     # Train PGExplainer on the full graph first
     print(f"\nTraining PGExplainer network...")

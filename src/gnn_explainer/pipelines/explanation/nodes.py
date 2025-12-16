@@ -543,12 +543,16 @@ def run_gnnexplainer(
 
         try:
             # Run explainer
-            # Note: We explain the edge by finding important neighboring edges
+            # For explanation_type='model', we explain by providing the edge endpoints as index
+            # The explainer will find important neighboring edges that lead to the prediction
+            head_node = edge_to_explain[0, 0].item()
+            tail_node = edge_to_explain[1, 0].item()
+
             explanation = explainer(
                 x=x,
                 edge_index=edge_index,
                 edge_type=edge_type_to_explain,
-                target=edge_to_explain
+                index=head_node  # Explain from the head node perspective
             )
 
             triple_time = time.time() - triple_start
@@ -709,11 +713,16 @@ def run_pgexplainer(
 
         try:
             # Run explainer
+            # For explanation_type='model', we explain by providing the edge endpoints as index
+            # The explainer will find important neighboring edges that lead to the prediction
+            head_node = edge_to_explain[0, 0].item()
+            tail_node = edge_to_explain[1, 0].item()
+
             explanation = explainer(
                 x=x,
                 edge_index=edge_index,
                 edge_type=edge_type_to_explain,
-                target=edge_to_explain
+                index=head_node  # Explain from the head node perspective
             )
 
             triple_time = time.time() - triple_start

@@ -55,7 +55,7 @@ evaluation:
 explanation:
   # Triple selection parameters
   triple_selection:
-    strategy: "from_file"                 # Options: "random", "test_triples", "from_file", "specific_relations", "specific_nodes"
+    strategy: "test_triples"              # Options: "random", "test_triples", "from_file", "specific_relations", "specific_nodes"
                                           # - "random": randomly select from training graph edges
                                           # - "test_triples": randomly select from test set triples
                                           # - "from_file": load triples from a file (e.g., top10_test.txt)

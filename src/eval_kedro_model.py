@@ -137,6 +137,8 @@ def evaluate_kedro_model(
     print("\n" + "="*60)
     print("EVALUATION METRICS")
     print("="*60)
+    print(f"Batch size: {batch_size}")
+    print(f"Test triples: {len(test_triples)}")
 
     # 1. ACCURACY METRIC
     print("\n[1/3] Computing Accuracy...")

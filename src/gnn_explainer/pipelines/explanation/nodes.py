@@ -714,10 +714,26 @@ def run_gnnexplainer(
             sub_edge_type = edge_type[edge_mask]
 
             # Create subgraph node features
+            # Ensure subset is on correct device and within bounds
+            if subset.max().item() >= num_nodes:
+                print(f"\n      Warning: subset contains indices >= num_nodes ({subset.max().item()} >= {num_nodes})")
+                print(f"      Filtering out-of-bounds indices...")
+                valid_mask = subset < num_nodes
+                subset = subset[valid_mask]
+                # Need to rebuild sub_edge_index with filtered nodes
+                if len(subset) == 0:
+                    raise ValueError("All nodes filtered out due to out-of-bounds indices")
+
             sub_x = x[subset]
 
             # Get remapped head node index
             head_node_remapped = mapping[0].item()
+
+            # Validate indices
+            if head_node_remapped >= len(subset):
+                raise ValueError(f"head_node_remapped ({head_node_remapped}) >= len(subset) ({len(subset)})")
+            if sub_edge_index.max().item() >= len(subset):
+                raise ValueError(f"sub_edge_index contains indices >= len(subset) ({sub_edge_index.max().item()} >= {len(subset)})")
 
             print(f"{len(subset)} nodes, {sub_edge_index.size(1)} edges", end='', flush=True)
             print(f"\n      Optimizing edge mask for {epochs} epochs...", end='', flush=True)
@@ -931,10 +947,25 @@ def run_pgexplainer(
             sub_edge_type = edge_type[edge_mask]
 
             # Create subgraph node features
+            # Ensure subset is on correct device and within bounds
+            if subset.max().item() >= num_nodes:
+                print(f"\n      Warning: subset contains indices >= num_nodes ({subset.max().item()} >= {num_nodes})")
+                print(f"      Filtering out-of-bounds indices...")
+                valid_mask = subset < num_nodes
+                subset = subset[valid_mask]
+                if len(subset) == 0:
+                    raise ValueError("All nodes filtered out due to out-of-bounds indices")
+
             sub_x = x[subset]
 
             # Get remapped head node index
             head_node_remapped = mapping[0].item()
+
+            # Validate indices
+            if head_node_remapped >= len(subset):
+                raise ValueError(f"head_node_remapped ({head_node_remapped}) >= len(subset) ({len(subset)})")
+            if sub_edge_index.max().item() >= len(subset):
+                raise ValueError(f"sub_edge_index contains indices >= len(subset) ({sub_edge_index.max().item()} >= {len(subset)})")
 
             print(f"{len(subset)} nodes, {sub_edge_index.size(1)} edges", end='', flush=True)
             print(f"\n      Generating explanation...", end='', flush=True)

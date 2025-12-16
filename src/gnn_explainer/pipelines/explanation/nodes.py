@@ -39,30 +39,30 @@ class ModelWrapper(nn.Module):
 
         Args:
             x: Node features (not used for KG models, but required by Explainer)
-            edge_index: Edge index to explain (shape: [2, num_edges])
+            edge_index: Edge index of the subgraph (shape: [2, num_edges])
 
         Returns:
             Scores for the given edges
         """
         if self.mode == 'link_prediction':
-            # Get node and relation embeddings
-            node_emb, rel_emb = self.kg_model.encode(self.edge_index, self.edge_type)
+            # IMPORTANT: Use the PROVIDED edge_index and edge_type for encoding
+            # The explainer passes us a SUBGRAPH, so we need to encode the subgraph
+            edge_type_for_encoding = kwargs.get('edge_type', None)
+
+            if edge_type_for_encoding is None:
+                # Fallback: use stored full graph (this shouldn't happen)
+                print("Warning: No edge_type provided to ModelWrapper, using full graph")
+                edge_type_for_encoding = self.edge_type
+
+            # Get node and relation embeddings FOR THE SUBGRAPH
+            node_emb, rel_emb = self.kg_model.encode(edge_index, edge_type_for_encoding)
 
             # Score the edges
             head_idx = edge_index[0]
             tail_idx = edge_index[1]
 
-            # For explanation, we need to determine relation type
-            # We'll use the edge_type from the original graph
-            # Find which edges in the original graph match the query edges
-            edge_type_for_query = kwargs.get('edge_type', None)
-
-            if edge_type_for_query is None:
-                # Default: assume relation 0 for all edges
-                # In practice, this should be provided
-                edge_type_for_query = torch.zeros(edge_index.size(1), dtype=torch.long, device=edge_index.device)
-
-            scores = self.kg_model.decode(node_emb, rel_emb, head_idx, tail_idx, edge_type_for_query)
+            # Use the same edge types for scoring
+            scores = self.kg_model.decode(node_emb, rel_emb, head_idx, tail_idx, edge_type_for_encoding)
 
             return scores
         else:

@@ -72,7 +72,7 @@ explanation:
     gnn_epochs: 200                       # Optimization epochs for each explanation
     gnn_lr: 0.01                          # Learning rate for mask optimization
     top_k_edges: 10                       # Number of top important edges to extract
-    subgraph_method: "khop"               # Options: "khop" (PyG k-hop), "paths" (igraph paths)
+    subgraph_method: "paths"               # Options: "khop" (PyG k-hop), "paths" (igraph paths)
     khop_distance: 2                      # For khop method: number of hops
     max_path_length: 3                    # For paths method: maximum path length
 

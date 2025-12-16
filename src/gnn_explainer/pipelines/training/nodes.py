@@ -286,6 +286,7 @@ def train_model(
 def compute_test_scores(
     trained_model_artifact: Dict,
     pyg_data: Dict,
+    knowledge_graph: Dict,
     device_str: str,
     batch_size: int = 1024
 ) -> Dict:
@@ -394,27 +395,73 @@ def compute_test_scores(
     print(f"  Sigmoid score range: [{sigmoid_scores.min():.4f}, {sigmoid_scores.max():.4f}]")
     print(f"  Mean sigmoid score: {sigmoid_scores.mean():.4f}")
 
-    # Save CSV file
+    # Create CSV DataFrame with entity/relation names
     import pandas as pd
-    csv_path = "data/07_model_output/test_triple_scores.csv"
+
+    # Get mapping dictionaries
+    idx_to_entity = knowledge_graph.get('idx_to_entity', {})
+    idx_to_relation = knowledge_graph.get('idx_to_relation', {})
+
+    # Create lists for entity and relation names
+    head_ids = []
+    head_names = []
+    relation_names = []
+    tail_ids = []
+    tail_names = []
+
+    for i in range(len(test_triples)):
+        head_idx = test_triples[i, 0].item()
+        rel_idx = test_triples[i, 1].item()
+        tail_idx = test_triples[i, 2].item()
+
+        head_ids.append(head_idx)
+        tail_ids.append(tail_idx)
+        head_names.append(idx_to_entity.get(head_idx, f"node_{head_idx}"))
+        tail_names.append(idx_to_entity.get(tail_idx, f"node_{tail_idx}"))
+        relation_names.append(idx_to_relation.get(rel_idx, f"rel_{rel_idx}"))
 
     df = pd.DataFrame({
-        'head': test_triples[:, 0].tolist(),
-        'relation': test_triples[:, 1].tolist(),
-        'tail': test_triples[:, 2].tolist(),
+        'head_id': head_ids,
+        'head': head_names,
+        'relation': relation_names,
+        'tail_id': tail_ids,
+        'tail': tail_names,
         'raw_score': all_scores_tensor.tolist(),
         'sigmoid_score': sigmoid_scores.tolist(),
     })
 
-    df.to_csv(csv_path, index=False)
-    print(f"\n✓ Saved CSV to: {csv_path}")
+    # Sort by sigmoid_score in descending order (highest scores first)
+    df = df.sort_values('sigmoid_score', ascending=False).reset_index(drop=True)
 
+    print(f"\n✓ Created DataFrame with {len(df)} rows")
+    print(f"  Sorted by sigmoid_score (descending)")
+    print(f"\nTop 5 predicted triples:")
+    for i in range(min(5, len(df))):
+        print(f"  {i+1}. ({df.iloc[i]['head']}, {df.iloc[i]['relation']}, {df.iloc[i]['tail']}) - score: {df.iloc[i]['sigmoid_score']:.4f}")
+
+    # Create top 10 triples string in test file format (tab-separated: head\trelation\ttail)
+    top10_df = df.head(10)
+    top10_lines = []
+
+    for i in range(len(top10_df)):
+        head = top10_df.iloc[i]['head']
+        relation = top10_df.iloc[i]['relation']
+        tail = top10_df.iloc[i]['tail']
+        top10_lines.append(f"{head}\t{relation}\t{tail}")
+
+    top10_text = "\n".join(top10_lines)
+
+    print(f"\n✓ Created top 10 triples file")
+    print("  (Tab-separated format: head\\trelation\\ttail)")
     print("\n" + "="*60)
 
-    return {
+    # Return pickle data, CSV DataFrame, and top10 text
+    scores_dict = {
         'test_triples': test_triples.cpu(),
         'scores': all_scores_tensor,
         'sigmoid_scores': sigmoid_scores,
         'model_type': model_type,
         'decoder_type': decoder_type,
     }
+
+    return scores_dict, df, top10_text

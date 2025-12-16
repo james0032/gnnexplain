@@ -55,8 +55,14 @@ evaluation:
 explanation:
   # Triple selection parameters
   triple_selection:
-    strategy: "random"                    # Options: "random", "specific_relations", "specific_nodes"
-    num_triples: 10                       # Number of triples to explain
+    strategy: "random"                    # Options: "random", "test_triples", "from_file", "specific_relations", "specific_nodes"
+                                          # - "random": randomly select from training graph edges
+                                          # - "test_triples": randomly select from test set triples
+                                          # - "from_file": load triples from a file (e.g., top10_test.txt)
+                                          # - "specific_relations": select triples with specific relation types
+                                          # - "specific_nodes": select triples involving specific nodes
+    num_triples: 10                       # Number of triples to explain (ignored for "from_file")
+    file_path: "data/07_model_output/top10_test.txt"  # For "from_file" strategy
     target_relations: [0, 1]              # For "specific_relations" strategy
     target_nodes: []                      # For "specific_nodes" strategy
 

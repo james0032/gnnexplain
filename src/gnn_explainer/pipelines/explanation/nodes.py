@@ -191,8 +191,171 @@ def select_triples_to_explain(
     print(f"Total edges in graph: {num_edges}")
 
     if selection_strategy == 'random':
-        # Random selection
+        # Random selection from training edges
         indices = torch.randperm(num_edges)[:num_triples]
+
+    elif selection_strategy == 'test_triples':
+        # Select from test triples
+        test_triples = pyg_data.get('test_triples', None)
+
+        if test_triples is None:
+            print("Warning: No test triples found in pyg_data, falling back to random")
+            indices = torch.randperm(num_edges)[:num_triples]
+        else:
+            print(f"Total test triples available: {len(test_triples)}")
+
+            # Randomly sample from test triples
+            num_to_select = min(num_triples, len(test_triples))
+            test_indices = torch.randperm(len(test_triples))[:num_to_select]
+
+            # Extract the selected test triples
+            selected_test_triples = test_triples[test_indices]
+
+            # For test triples, we need to create edge_index and edge_type from triples
+            # Test triples format: [head, relation, tail]
+            selected_edge_index = torch.stack([
+                selected_test_triples[:, 0],  # heads
+                selected_test_triples[:, 2]   # tails
+            ])
+            selected_edge_type = selected_test_triples[:, 1]  # relations
+
+            # Convert to readable format and return early
+            triples_readable = []
+            for i in range(len(selected_test_triples)):
+                head = selected_test_triples[i, 0].item()
+                tail = selected_test_triples[i, 2].item()
+                rel = selected_test_triples[i, 1].item()
+
+                # Get entity and relation names if available
+                head_name = knowledge_graph.get('idx_to_entity', {}).get(head, f"node_{head}")
+                tail_name = knowledge_graph.get('idx_to_entity', {}).get(tail, f"node_{tail}")
+                rel_name = knowledge_graph.get('idx_to_relation', {}).get(rel, f"rel_{rel}")
+
+                triples_readable.append({
+                    'head_idx': head,
+                    'tail_idx': tail,
+                    'relation_idx': rel,
+                    'head_name': head_name,
+                    'tail_name': tail_name,
+                    'relation_name': rel_name,
+                    'triple': f"({head_name}, {rel_name}, {tail_name})"
+                })
+
+            # Print sample triples
+            print(f"\n✓ Selected {len(triples_readable)} test triples")
+            print("\nSample selected test triples:")
+            for i, triple in enumerate(triples_readable[:5]):
+                print(f"  {i+1}. {triple['triple']}")
+
+            if len(triples_readable) > 5:
+                print(f"  ... and {len(triples_readable) - 5} more")
+
+            return {
+                'selected_indices': test_indices,
+                'selected_edge_index': selected_edge_index,
+                'selected_edge_type': selected_edge_type,
+                'triples_readable': triples_readable,
+                'num_selected': len(triples_readable),
+                'from_test_set': True
+            }
+
+    elif selection_strategy == 'from_file':
+        # Load triples from a file (e.g., top10_test.txt)
+        file_path = selection_params.get('file_path', None)
+
+        if file_path is None:
+            print("Warning: No file_path specified for 'from_file' strategy, falling back to random")
+            indices = torch.randperm(num_edges)[:num_triples]
+        else:
+            print(f"Loading triples from file: {file_path}")
+
+            try:
+                # Read triples from file (format: head\trelation\ttail)
+                with open(file_path, 'r') as f:
+                    file_lines = f.readlines()
+
+                print(f"Found {len(file_lines)} triples in file")
+
+                # Parse triples and convert to indices
+                idx_to_entity = knowledge_graph.get('idx_to_entity', {})
+                idx_to_relation = knowledge_graph.get('idx_to_relation', {})
+
+                # Create reverse mappings
+                entity_to_idx = {v: k for k, v in idx_to_entity.items()}
+                relation_to_idx = {v: k for k, v in idx_to_relation.items()}
+
+                selected_triples_list = []
+                triples_readable = []
+
+                for line in file_lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    parts = line.split('\t')
+                    if len(parts) != 3:
+                        print(f"Warning: Skipping malformed line: {line}")
+                        continue
+
+                    head_name, rel_name, tail_name = parts
+
+                    # Get indices
+                    head_idx = entity_to_idx.get(head_name, None)
+                    tail_idx = entity_to_idx.get(tail_name, None)
+                    rel_idx = relation_to_idx.get(rel_name, None)
+
+                    if head_idx is None or tail_idx is None or rel_idx is None:
+                        print(f"Warning: Could not find indices for triple: {line}")
+                        continue
+
+                    selected_triples_list.append([head_idx, rel_idx, tail_idx])
+
+                    triples_readable.append({
+                        'head_idx': head_idx,
+                        'tail_idx': tail_idx,
+                        'relation_idx': rel_idx,
+                        'head_name': head_name,
+                        'tail_name': tail_name,
+                        'relation_name': rel_name,
+                        'triple': f"({head_name}, {rel_name}, {tail_name})"
+                    })
+
+                if not selected_triples_list:
+                    print("Warning: No valid triples found in file, falling back to random")
+                    indices = torch.randperm(num_edges)[:num_triples]
+                else:
+                    # Convert to tensors
+                    selected_triples_tensor = torch.tensor(selected_triples_list, dtype=torch.long)
+
+                    selected_edge_index = torch.stack([
+                        selected_triples_tensor[:, 0],  # heads
+                        selected_triples_tensor[:, 2]   # tails
+                    ])
+                    selected_edge_type = selected_triples_tensor[:, 1]  # relations
+
+                    # Print sample triples
+                    print(f"\n✓ Loaded {len(triples_readable)} triples from file")
+                    print("\nSample loaded triples:")
+                    for i, triple in enumerate(triples_readable[:5]):
+                        print(f"  {i+1}. {triple['triple']}")
+
+                    if len(triples_readable) > 5:
+                        print(f"  ... and {len(triples_readable) - 5} more")
+
+                    return {
+                        'selected_indices': torch.arange(len(triples_readable)),
+                        'selected_edge_index': selected_edge_index,
+                        'selected_edge_type': selected_edge_type,
+                        'triples_readable': triples_readable,
+                        'num_selected': len(triples_readable),
+                        'from_file': True,
+                        'file_path': file_path
+                    }
+
+            except Exception as e:
+                print(f"Error loading file {file_path}: {e}")
+                print("Falling back to random selection")
+                indices = torch.randperm(num_edges)[:num_triples]
 
     elif selection_strategy == 'specific_relations':
         # Select triples with specific relation types

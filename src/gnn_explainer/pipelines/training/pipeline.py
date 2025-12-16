@@ -29,9 +29,10 @@ def create_pipeline(**kwargs) -> Pipeline:
             inputs=[
                 "trained_model_artifact",
                 "pyg_data",
+                "knowledge_graph",
                 "params:device"
             ],
-            outputs="test_triple_scores",
+            outputs=["test_triple_scores", "test_triple_scores_csv", "top10_test"],
             name="compute_test_scores",
         ),
     ])

@@ -58,7 +58,7 @@ def create_pipeline(**kwargs) -> Pipeline:
             inputs=[
                 "prepared_model",
                 "selected_triples",
-                "params:explanation.gnnexplainer"
+                "params:explanation"
             ],
             outputs="gnn_explanations",
             name="run_gnnexplainer"
@@ -71,7 +71,7 @@ def create_pipeline(**kwargs) -> Pipeline:
                 "prepared_model",
                 "selected_triples",
                 "pyg_data",
-                "params:explanation.pgexplainer"
+                "params:explanation"
             ],
             outputs="pg_explanations",
             name="run_pgexplainer"
@@ -84,7 +84,7 @@ def create_pipeline(**kwargs) -> Pipeline:
                 "prepared_model",
                 "selected_triples",
                 "pyg_data",
-                "params:explanation.page"
+                "params:explanation"
             ],
             outputs="page_explanations",
             name="run_page_explainer"

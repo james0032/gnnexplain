@@ -473,9 +473,10 @@ def run_gnnexplainer(
     edge_type = model_dict['edge_type']
     num_nodes = model_dict['num_nodes']
 
-    # GNNExplainer configuration
-    epochs = explainer_params.get('gnn_epochs', 200)
-    lr = explainer_params.get('gnn_lr', 0.01)
+    # Extract GNNExplainer-specific configuration
+    gnn_params = explainer_params.get('gnnexplainer', {})
+    epochs = gnn_params.get('gnn_epochs', 200)
+    lr = gnn_params.get('gnn_lr', 0.01)
 
     print(f"\nGNNExplainer configuration:")
     print(f"  Epochs: {epochs}")
@@ -529,7 +530,7 @@ def run_gnnexplainer(
             edge_mask = explanation.edge_mask if hasattr(explanation, 'edge_mask') else None
 
             # Get top-k important edges
-            top_k = explainer_params.get('top_k_edges', 10)
+            top_k = gnn_params.get('top_k_edges', 10)
 
             if edge_mask is not None:
                 top_k_indices = torch.topk(edge_mask, min(top_k, len(edge_mask))).indices
@@ -565,7 +566,7 @@ def run_gnnexplainer(
         'explainer_type': 'GNNExplainer',
         'explanations': explanations,
         'num_explanations': len(explanations),
-        'params': explainer_params
+        'params': gnn_params
     }
 
 
@@ -600,9 +601,10 @@ def run_pgexplainer(
     edge_type = model_dict['edge_type']
     num_nodes = model_dict['num_nodes']
 
-    # PGExplainer configuration
-    epochs = explainer_params.get('pg_epochs', 30)
-    lr = explainer_params.get('pg_lr', 0.003)
+    # Extract PGExplainer-specific configuration
+    pg_params = explainer_params.get('pgexplainer', {})
+    epochs = pg_params.get('pg_epochs', 30)
+    lr = pg_params.get('pg_lr', 0.003)
 
     print(f"\nPGExplainer configuration:")
     print(f"  Training epochs: {epochs}")
@@ -634,7 +636,7 @@ def run_pgexplainer(
 
     # For PGExplainer, we need to provide training data
     # We'll use a subset of edges from the graph
-    training_edges = explainer_params.get('training_edges', 100)
+    training_edges = pg_params.get('training_edges', 100)
     num_edges = edge_index.size(1)
     train_indices = torch.randperm(num_edges)[:min(training_edges, num_edges)]
 
@@ -671,7 +673,7 @@ def run_pgexplainer(
             edge_mask = explanation.edge_mask if hasattr(explanation, 'edge_mask') else None
 
             # Get top-k important edges
-            top_k = explainer_params.get('top_k_edges', 10)
+            top_k = pg_params.get('top_k_edges', 10)
 
             if edge_mask is not None:
                 top_k_indices = torch.topk(edge_mask, min(top_k, len(edge_mask))).indices
@@ -707,7 +709,7 @@ def run_pgexplainer(
         'explainer_type': 'PGExplainer',
         'explanations': explanations,
         'num_explanations': len(explanations),
-        'params': explainer_params
+        'params': pg_params
     }
 
 
@@ -748,13 +750,14 @@ def run_page_explainer(
     # Import improved PAGE components
     from .page_improved import ImprovedPAGEExplainer, extract_link_subgraph
 
-    # PAGE configuration
-    train_epochs = explainer_params.get('train_epochs', 100)
-    lr = explainer_params.get('lr', 0.003)
-    k_hops = explainer_params.get('k_hops', 2)
-    hidden_dim = explainer_params.get('encoder_hidden1', 32)
-    latent_dim = explainer_params.get('latent_dim', 16)
-    prediction_weight = explainer_params.get('prediction_weight', 1.0)
+    # Extract PAGE-specific configuration
+    page_params = explainer_params.get('page', {})
+    train_epochs = page_params.get('train_epochs', 100)
+    lr = page_params.get('lr', 0.003)
+    k_hops = page_params.get('k_hops', 2)
+    hidden_dim = page_params.get('encoder_hidden1', 32)
+    latent_dim = page_params.get('latent_dim', 16)
+    prediction_weight = page_params.get('prediction_weight', 1.0)
 
     print(f"\nImproved PAGE configuration:")
     print(f"  Training epochs: {train_epochs}")
@@ -773,8 +776,8 @@ def run_page_explainer(
         embedding_dim=trained_model.embedding_dim,
         hidden_dim=hidden_dim,
         latent_dim=latent_dim,
-        decoder_hidden_dim=explainer_params.get('decoder_hidden1', 16),
-        dropout=explainer_params.get('dropout', 0.0),
+        decoder_hidden_dim=page_params.get('decoder_hidden1', 16),
+        dropout=page_params.get('dropout', 0.0),
         device=device
     )
 
@@ -848,7 +851,7 @@ def run_page_explainer(
             'explainer_type': 'ImprovedPAGE',
             'explanations': [],
             'num_explanations': 0,
-            'params': explainer_params,
+            'params': page_params,
             'error': 'No valid subgraphs extracted'
         }
 
@@ -859,7 +862,7 @@ def run_page_explainer(
         subgraphs_data=subgraphs_data,
         epochs=train_epochs,
         lr=lr,
-        kl_weight=explainer_params.get('kl_weight', 0.2),
+        kl_weight=page_params.get('kl_weight', 0.2),
         prediction_weight=prediction_weight,
         verbose=True
     )
@@ -887,7 +890,7 @@ def run_page_explainer(
             edge_importance_matrix = edge_importance.squeeze(0).cpu()  # (num_nodes, num_nodes)
 
             # Get top-k important edges
-            top_k = explainer_params.get('top_k_edges', 10)
+            top_k = page_params.get('top_k_edges', 10)
 
             # Flatten and get top-k
             num_subgraph_nodes = edge_importance_matrix.size(0)
@@ -949,7 +952,7 @@ def run_page_explainer(
         'explainer_type': 'ImprovedPAGE',
         'explanations': explanations,
         'num_explanations': len(explanations),
-        'params': explainer_params,
+        'params': page_params,
         'subgraph_info': subgraph_info,
         'model_aware': True,
         'uses_encoder': True,

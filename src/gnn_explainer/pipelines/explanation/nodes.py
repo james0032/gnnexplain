@@ -45,24 +45,25 @@ class ModelWrapper(nn.Module):
             Scores for the given edges
         """
         if self.mode == 'link_prediction':
-            # IMPORTANT: Use the PROVIDED edge_index and edge_type for encoding
-            # The explainer passes us a SUBGRAPH, so we need to encode the subgraph
-            edge_type_for_encoding = kwargs.get('edge_type', None)
+            # CRITICAL: CompGCN needs the FULL GRAPH for message passing
+            # We encode on the full graph, then extract embeddings for subgraph nodes
+            # This is because each node's embedding depends on its full neighborhood
 
-            if edge_type_for_encoding is None:
-                # Fallback: use stored full graph (this shouldn't happen)
-                print("Warning: No edge_type provided to ModelWrapper, using full graph")
-                edge_type_for_encoding = self.edge_type
+            # Get node and relation embeddings using FULL GRAPH
+            node_emb, rel_emb = self.kg_model.encode(self.edge_index, self.edge_type)
 
-            # Get node and relation embeddings FOR THE SUBGRAPH
-            node_emb, rel_emb = self.kg_model.encode(edge_index, edge_type_for_encoding)
-
-            # Score the edges
+            # Score the edges in the SUBGRAPH
             head_idx = edge_index[0]
             tail_idx = edge_index[1]
 
-            # Use the same edge types for scoring
-            scores = self.kg_model.decode(node_emb, rel_emb, head_idx, tail_idx, edge_type_for_encoding)
+            # Get edge types for the subgraph
+            edge_type_for_query = kwargs.get('edge_type', None)
+            if edge_type_for_query is None:
+                # Fallback: assume relation 0
+                edge_type_for_query = torch.zeros(edge_index.size(1), dtype=torch.long, device=edge_index.device)
+
+            # Decode using full graph embeddings but subgraph edges
+            scores = self.kg_model.decode(node_emb, rel_emb, head_idx, tail_idx, edge_type_for_query)
 
             return scores
         else:

@@ -9,7 +9,6 @@ Usage:
 """
 
 import torch
-import torch.nn.functional as F
 import pickle
 import argparse
 import sys
@@ -145,7 +144,8 @@ def evaluate_kedro_model(
     all_labels = []
 
     # Score positive samples
-    for i in range(0, len(test_triples), batch_size):
+    num_pos_batches = (len(test_triples) + batch_size - 1) // batch_size
+    for batch_idx, i in enumerate(range(0, len(test_triples), batch_size), 1):
         batch_triples = test_triples[i:i+batch_size].to(device)
         scores = model(
             edge_index, edge_type,
@@ -156,11 +156,16 @@ def evaluate_kedro_model(
         all_predictions.extend(scores.cpu().tolist())
         all_labels.extend([1.0] * len(scores))
 
+        # Print progress every 10 batches or on last batch
+        if batch_idx % 10 == 0 or batch_idx == num_pos_batches:
+            print(f"  Positive samples: {batch_idx}/{num_pos_batches} batches processed", flush=True)
+
     # Generate negative samples for accuracy
     num_nodes = edge_index.max().item() + 1
     neg_triples = generate_negative_samples(test_triples, num_nodes, num_negatives=5)
 
-    for i in range(0, len(neg_triples), batch_size):
+    num_neg_batches = (len(neg_triples) + batch_size - 1) // batch_size
+    for batch_idx, i in enumerate(range(0, len(neg_triples), batch_size), 1):
         batch_triples = neg_triples[i:i+batch_size].to(device)
         scores = model(
             edge_index, edge_type,
@@ -170,6 +175,10 @@ def evaluate_kedro_model(
         )
         all_predictions.extend(scores.cpu().tolist())
         all_labels.extend([0.0] * len(scores))
+
+        # Print progress every 10 batches or on last batch
+        if batch_idx % 10 == 0 or batch_idx == num_neg_batches:
+            print(f"  Negative samples: {batch_idx}/{num_neg_batches} batches processed", flush=True)
 
     # Calculate accuracy
     all_predictions_tensor = torch.tensor(all_predictions)

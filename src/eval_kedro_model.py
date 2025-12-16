@@ -9,21 +9,22 @@ Usage:
 """
 
 import torch
+import torch.nn.functional as F
 import pickle
 import argparse
 import sys
 from pathlib import Path
+from typing import Dict, List
+from collections import defaultdict
 
-# Import the evaluation logic from cl_eval
-from cl_eval import (
-    evaluate,
-    KGDataLoader,
-)
+# Import data loader from cl_eval
+from cl_eval import KGDataLoader
 
 # Import model classes
 sys.path.append(str(Path(__file__).parent / "gnn_explainer" / "pipelines" / "training"))
 from gnn_explainer.pipelines.training.model import RGCNDistMultModel
 from gnn_explainer.pipelines.training.kg_models import CompGCNKGModel
+from gnn_explainer.pipelines.utils import generate_negative_samples
 
 
 def load_kedro_model(model_path: str, device: torch.device):
@@ -113,6 +114,165 @@ def load_kedro_model(model_path: str, device: torch.device):
     return model, model_config
 
 
+@torch.no_grad()
+def evaluate_kedro_model(
+    model,
+    edge_index: torch.Tensor,
+    edge_type: torch.Tensor,
+    test_triples: torch.Tensor,
+    all_triples: torch.Tensor,
+    device: torch.device,
+    batch_size: int = 1024,
+    compute_mrr: bool = True,
+    compute_hits: bool = True,
+    hit_k_values: List[int] = [1, 3, 10]
+) -> Dict[str, float]:
+    """
+    Comprehensive evaluation for Kedro-trained models.
+
+    Works with both RGCN and CompGCN models.
+    """
+    model.eval()
+    results = {}
+
+    print("\n" + "="*60)
+    print("EVALUATION METRICS")
+    print("="*60)
+
+    # 1. ACCURACY METRIC
+    print("\n[1/3] Computing Accuracy...")
+    all_predictions = []
+    all_labels = []
+
+    # Score positive samples
+    for i in range(0, len(test_triples), batch_size):
+        batch_triples = test_triples[i:i+batch_size].to(device)
+        scores = model(
+            edge_index, edge_type,
+            batch_triples[:, 0],
+            batch_triples[:, 2],
+            batch_triples[:, 1]
+        )
+        all_predictions.extend(scores.cpu().tolist())
+        all_labels.extend([1.0] * len(scores))
+
+    # Generate negative samples for accuracy
+    num_nodes = edge_index.max().item() + 1
+    neg_triples = generate_negative_samples(test_triples, num_nodes, num_negatives=5)
+
+    for i in range(0, len(neg_triples), batch_size):
+        batch_triples = neg_triples[i:i+batch_size].to(device)
+        scores = model(
+            edge_index, edge_type,
+            batch_triples[:, 0],
+            batch_triples[:, 2],
+            batch_triples[:, 1]
+        )
+        all_predictions.extend(scores.cpu().tolist())
+        all_labels.extend([0.0] * len(scores))
+
+    # Calculate accuracy
+    all_predictions_tensor = torch.tensor(all_predictions)
+    all_labels_tensor = torch.tensor(all_labels)
+    predictions = (torch.sigmoid(all_predictions_tensor) > 0.5).float()
+    accuracy = (predictions == all_labels_tensor).float().mean().item()
+    results['accuracy'] = accuracy
+    print(f"  ✓ Accuracy: {accuracy:.4f}")
+
+    # 2. MRR AND HIT@K METRICS (using scoring function)
+    if compute_mrr or compute_hits:
+        print(f"\n[2/3] Computing Ranking Metrics...")
+        print("  Building filtered candidate sets...")
+
+        # Pre-compute filtered candidates for each (head, rel) pair
+        invalid_tails = defaultdict(set)
+        for triple in all_triples:
+            h, r, t = triple[0].item(), triple[1].item(), triple[2].item()
+            invalid_tails[(h, r)].add(t)
+
+        print("  Computing rankings...")
+        mrr_sum = 0.0
+        hit_counts = {k: 0 for k in hit_k_values}
+        num_samples = 0
+
+        # Process test triples in batches
+        num_batches = (len(test_triples) + batch_size - 1) // batch_size
+
+        for batch_idx in range(num_batches):
+            start_idx = batch_idx * batch_size
+            end_idx = min(start_idx + batch_size, len(test_triples))
+            batch = test_triples[start_idx:end_idx]
+            current_batch_size = len(batch)
+
+            # Extract batch components
+            batch_heads = batch[:, 0].to(device)
+            batch_rels = batch[:, 1].to(device)
+            batch_tails = batch[:, 2].to(device)
+
+            # Score all possible tails for each (head, rel) pair
+            # We'll score each candidate tail one by one (inefficient but compatible)
+            all_tail_scores = torch.zeros(current_batch_size, num_nodes, device=device)
+
+            for tail_candidate in range(num_nodes):
+                # Create batch of triples with this tail candidate
+                candidate_tails = torch.full((current_batch_size,), tail_candidate,
+                                            dtype=torch.long, device=device)
+
+                # Score these triples
+                scores = model(edge_index, edge_type, batch_heads, candidate_tails, batch_rels)
+                all_tail_scores[:, tail_candidate] = scores
+
+            # Apply filtering: set invalid candidates to -inf
+            for i in range(current_batch_size):
+                h = batch_heads[i].item()
+                r = batch_rels[i].item()
+                t = batch_tails[i].item()
+
+                # Get invalid tails for this (h, r) pair
+                invalid_set = invalid_tails.get((h, r), set())
+
+                # Mask out all invalid tails except the true one
+                for invalid_t in invalid_set:
+                    if invalid_t != t:
+                        all_tail_scores[i, invalid_t] = float('-inf')
+
+            # Count-based ranking
+            true_tail_scores = all_tail_scores[torch.arange(current_batch_size), batch_tails]
+
+            # For each triple, count how many scores are strictly greater
+            ranks = (all_tail_scores > true_tail_scores.unsqueeze(1)).sum(dim=1) + 1
+
+            # Accumulate metrics
+            if compute_mrr:
+                mrr_sum += (1.0 / ranks.float()).sum().item()
+
+            if compute_hits:
+                for k in hit_k_values:
+                    hit_counts[k] += (ranks <= k).sum().item()
+
+            num_samples += current_batch_size
+
+            if (batch_idx + 1) % 10 == 0 or batch_idx == num_batches - 1:
+                print(f"    Processed {end_idx}/{len(test_triples)} test triples")
+
+        # Calculate final metrics
+        if compute_mrr:
+            results['mrr'] = mrr_sum / num_samples
+            print(f"  ✓ MRR: {results['mrr']:.4f}")
+
+        if compute_hits:
+            for k in hit_k_values:
+                metric_name = f'hit@{k}'
+                results[metric_name] = hit_counts[k] / num_samples
+                print(f"  ✓ Hit@{k}: {results[metric_name]:.4f}")
+
+    print("\n" + "="*60)
+    print("EVALUATION COMPLETE")
+    print("="*60)
+
+    return results
+
+
 def main():
     """Main evaluation pipeline."""
     parser = argparse.ArgumentParser(description='Evaluate Kedro-trained GNN Model')
@@ -188,7 +348,7 @@ def main():
     model, model_config = load_kedro_model(args.model_path, device)
 
     # Evaluate on test set
-    test_metrics = evaluate(
+    test_metrics = evaluate_kedro_model(
         model, edge_index, edge_type, test_triples,
         all_triples, device, batch_size=args.batch_size,
         compute_mrr=args.compute_mrr,

@@ -551,7 +551,7 @@ def run_gnnexplainer(
             explanation = explainer(
                 x=x,
                 edge_index=edge_index,
-                edge_type=edge_type_to_explain,
+                edge_type=edge_type,  # Use full graph edge types, not just the target triple
                 index=head_node  # Explain from the head node perspective
             )
 
@@ -721,7 +721,7 @@ def run_pgexplainer(
             explanation = explainer(
                 x=x,
                 edge_index=edge_index,
-                edge_type=edge_type_to_explain,
+                edge_type=edge_type,  # Use full graph edge types, not just the target triple
                 index=head_node  # Explain from the head node perspective
             )
 

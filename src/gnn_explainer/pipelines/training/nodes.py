@@ -398,9 +398,27 @@ def compute_test_scores(
     # Create CSV DataFrame with entity/relation names
     import pandas as pd
 
-    # Get mapping dictionaries
+    # Get mapping dictionaries from knowledge_graph
+    # First try to get pre-computed reverse mappings
     idx_to_entity = knowledge_graph.get('idx_to_entity', {})
     idx_to_relation = knowledge_graph.get('idx_to_relation', {})
+
+    # If reverse mappings don't exist, create them from node_dict and rel_dict
+    if not idx_to_entity or not idx_to_relation:
+        print("Creating reverse mappings from node_dict and rel_dict...")
+        node_dict = knowledge_graph.get('node_dict', {})
+        rel_dict = knowledge_graph.get('rel_dict', {})
+
+        # Create reverse mappings: index -> name
+        idx_to_entity = {v: k for k, v in node_dict.items()}
+        idx_to_relation = {v: k for k, v in rel_dict.items()}
+
+        print(f"  Created idx_to_entity with {len(idx_to_entity)} entities")
+        print(f"  Created idx_to_relation with {len(idx_to_relation)} relations")
+    else:
+        print(f"Using pre-computed reverse mappings:")
+        print(f"  idx_to_entity: {len(idx_to_entity)} entities")
+        print(f"  idx_to_relation: {len(idx_to_relation)} relations")
 
     # Create lists for entity and relation names
     head_ids = []

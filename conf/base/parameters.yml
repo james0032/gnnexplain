@@ -91,7 +91,9 @@ explanation:
   page:
     train_epochs: 100                     # Training epochs for VGAE
     lr: 0.003                             # Learning rate
-    k_hops: 2                             # Number of hops for subgraph extraction
+    k_hops: 2                             # Number of hops for subgraph extraction (khop method)
+    subgraph_method: "paths"              # Options: "khop" (PyG k-hop), "paths" (igraph paths)
+    max_path_length: 3                    # For paths method: maximum path length
     encoder_hidden1: 32                   # Encoder hidden layer 1 dimensions
     encoder_hidden2: 16                   # Encoder hidden layer 2 dimensions (unused in improved version)
     latent_dim: 16                        # Latent space dimensions

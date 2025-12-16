@@ -1059,10 +1059,18 @@ def run_page_explainer(
     latent_dim = page_params.get('latent_dim', 16)
     prediction_weight = page_params.get('prediction_weight', 1.0)
 
+    # Get subgraph extraction method
+    subgraph_method = page_params.get('subgraph_method', 'khop')
+    max_path_length = page_params.get('max_path_length', 3)
+
     print(f"\nImproved PAGE configuration:")
     print(f"  Training epochs: {train_epochs}")
     print(f"  Learning rate: {lr}")
-    print(f"  K-hops: {k_hops}")
+    print(f"  Subgraph method: {subgraph_method}")
+    if subgraph_method == 'paths':
+        print(f"  Max path length: {max_path_length}")
+    else:
+        print(f"  K-hops: {k_hops}")
     print(f"  Latent dim: {latent_dim}")
     print(f"  Prediction weight: {prediction_weight}")
     print(f"  Using CompGCN embeddings: {trained_model.embedding_dim}D")
@@ -1099,13 +1107,16 @@ def run_page_explainer(
         rel_idx = selected_edge_type[i].item()
 
         try:
-            # Extract k-hop subgraph around head and tail
+            # Extract subgraph around head and tail
             subgraph_nodes, subgraph_edges, adj_matrix = extract_link_subgraph(
                 edge_index=edge_index.cpu(),
                 head_idx=head_idx,
                 tail_idx=tail_idx,
                 num_hops=k_hops,
-                num_nodes=num_nodes
+                num_nodes=num_nodes,
+                method=subgraph_method,
+                edge_type=edge_type.cpu() if subgraph_method == 'paths' else None,
+                max_path_length=max_path_length
             )
 
             num_subgraph_nodes = len(subgraph_nodes)

@@ -439,9 +439,61 @@ def extract_link_subgraph(
     head_idx: int,
     tail_idx: int,
     num_hops: int,
-    num_nodes: int
+    num_nodes: int,
+    method: str = 'khop',
+    edge_type: Optional[torch.Tensor] = None,
+    max_path_length: int = 3
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Extract subgraph around both head and tail nodes."""
+    """
+    Extract subgraph around both head and tail nodes.
+
+    Args:
+        edge_index: Full graph edge index
+        head_idx: Head node index
+        tail_idx: Tail node index
+        num_hops: Number of hops (for khop method)
+        num_nodes: Total number of nodes in graph
+        method: 'khop' or 'paths'
+        edge_type: Edge types tensor (needed for paths method)
+        max_path_length: Maximum path length (for paths method)
+
+    Returns:
+        subgraph_nodes, subgraph_edges, adj_matrix
+    """
+    if method == 'paths' and edge_type is not None:
+        # Use path-based extraction (same as in nodes.py)
+        try:
+            from ..explanation.nodes import extract_path_based_subgraph
+
+            # Extract path-based subgraph
+            device = edge_index.device
+            subset, sub_edge_index, mapping, edge_mask = extract_path_based_subgraph(
+                head_idx, tail_idx, edge_index, edge_type, max_path_length, device
+            )
+
+            subgraph_nodes = subset
+            num_subgraph_nodes = len(subgraph_nodes)
+
+            # Extract subgraph edges from original edge_index
+            subgraph_edges = edge_index[:, edge_mask]
+
+            # Build adjacency matrix
+            adj_matrix = torch.zeros((num_subgraph_nodes, num_subgraph_nodes))
+            node_map = {old_idx.item(): new_idx for new_idx, old_idx in enumerate(subgraph_nodes)}
+
+            for i in range(subgraph_edges.size(1)):
+                src = subgraph_edges[0, i].item()
+                dst = subgraph_edges[1, i].item()
+                if src in node_map and dst in node_map:
+                    adj_matrix[node_map[src], node_map[dst]] = 1.0
+
+            return subgraph_nodes, subgraph_edges, adj_matrix
+
+        except Exception as e:
+            print(f"Warning: Path-based extraction failed ({e}), falling back to k-hop")
+            # Fall through to k-hop method
+
+    # K-hop method (default)
     head_nodes, _ = extract_k_hop_subgraph(edge_index, head_idx, num_hops, num_nodes)
     tail_nodes, _ = extract_k_hop_subgraph(edge_index, tail_idx, num_hops, num_nodes)
 

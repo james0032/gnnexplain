@@ -95,31 +95,32 @@ def prepare_model_for_explanation(
     from ..training.kg_models import CompGCNKGModel
     from ..training.model import RGCNDistMultModel
 
-    metadata = trained_model_dict['metadata']
-    model_type = metadata['model_type']
+    # Extract model configuration (handles both old 'metadata' and new 'model_config' format)
+    model_config = trained_model_dict.get('model_config', trained_model_dict.get('metadata', {}))
+    model_type = model_config['model_type']
 
     print(f"\nRecreating {model_type.upper()} model...")
-    print(f"  Decoder: {metadata['decoder_type']}")
+    print(f"  Decoder: {model_config['decoder_type']}")
 
     if model_type == 'compgcn':
         model = CompGCNKGModel(
-            num_nodes=metadata['num_nodes'],
-            num_relations=metadata['num_relations'],
-            embedding_dim=metadata['embedding_dim'],
-            decoder_type=metadata['decoder_type'],
-            num_layers=metadata['num_layers'],
-            comp_fn=metadata.get('comp_fn', 'sub'),
-            dropout=metadata['dropout'],
-            conve_kwargs=metadata.get('conve_kwargs')
+            num_nodes=model_config['num_nodes'],
+            num_relations=model_config['num_relations'],
+            embedding_dim=model_config['embedding_dim'],
+            decoder_type=model_config['decoder_type'],
+            num_layers=model_config['num_layers'],
+            comp_fn=model_config.get('comp_fn', 'sub'),
+            dropout=model_config['dropout'],
+            conve_kwargs=model_config.get('conve_kwargs')
         )
     elif model_type == 'rgcn':
         model = RGCNDistMultModel(
-            num_nodes=metadata['num_nodes'],
-            num_relations=metadata['num_relations'],
-            embedding_dim=metadata['embedding_dim'],
-            num_layers=metadata['num_layers'],
-            num_bases=metadata.get('num_bases', 30),
-            dropout=metadata['dropout']
+            num_nodes=model_config['num_nodes'],
+            num_relations=model_config['num_relations'],
+            embedding_dim=model_config['embedding_dim'],
+            num_layers=model_config['num_layers'],
+            num_bases=model_config.get('num_bases', 30),
+            dropout=model_config['dropout']
         )
     else:
         raise ValueError(f"Unknown model_type: {model_type}")
@@ -149,8 +150,8 @@ def prepare_model_for_explanation(
         'wrapped_model': wrapped_model,
         'edge_index': edge_index,
         'edge_type': edge_type,
-        'num_nodes': metadata['num_nodes'],
-        'num_relations': metadata['num_relations'],
+        'num_nodes': model_config['num_nodes'],
+        'num_relations': model_config['num_relations'],
         'device': device
     }
 

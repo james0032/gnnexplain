@@ -2,9 +2,10 @@
 
 import torch
 import torch.nn as nn
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Set
 from torch_geometric.explain import Explainer, GNNExplainer, PGExplainer
 from torch_geometric.explain import Explanation
+import numpy as np
 
 
 class ModelWrapper(nn.Module):
@@ -66,6 +67,143 @@ class ModelWrapper(nn.Module):
             return scores
         else:
             raise NotImplementedError(f"Mode {self.mode} not implemented yet")
+
+
+def extract_path_based_subgraph(
+    head_node: int,
+    tail_node: int,
+    edge_index: torch.Tensor,
+    edge_type: torch.Tensor,
+    max_path_length: int = 3,
+    device: torch.device = torch.device('cpu')
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Extract subgraph based on paths between head and tail nodes using igraph.
+
+    This follows the approach from filter_training_igraph.py:
+    1. Build an igraph from the PyG edge_index
+    2. Find all simple paths between head and tail up to max_path_length
+    3. Extract edges from these paths
+    4. Return subgraph with node relabeling
+
+    Args:
+        head_node: Source node index
+        tail_node: Target node index
+        edge_index: Full graph edge index [2, num_edges]
+        edge_type: Full graph edge types [num_edges]
+        max_path_length: Maximum path length to consider
+        device: torch device
+
+    Returns:
+        Tuple of (subset, sub_edge_index, mapping, edge_mask)
+        - subset: Node IDs in subgraph
+        - sub_edge_index: Relabeled edge index
+        - mapping: Mapping from [head, tail] to new indices
+        - edge_mask: Boolean mask for edges in subgraph
+    """
+    try:
+        import igraph as ig
+    except ImportError:
+        print("Warning: igraph not installed. Falling back to k-hop subgraph.")
+        print("Install with: pip install igraph")
+        from torch_geometric.utils import k_hop_subgraph
+        return k_hop_subgraph(
+            node_idx=[head_node, tail_node],
+            num_hops=2,
+            edge_index=edge_index,
+            relabel_nodes=True,
+            num_nodes=edge_index.max().item() + 1
+        )
+
+    # Convert PyG edge_index to numpy for igraph
+    edge_list = edge_index.t().cpu().numpy()  # [num_edges, 2]
+    num_nodes = edge_index.max().item() + 1
+
+    # Build undirected igraph
+    g = ig.Graph(n=num_nodes, edges=edge_list.tolist(), directed=False)
+
+    # Find all simple paths between head and tail
+    try:
+        # Try with cutoff parameter (igraph >= 0.10.x)
+        paths = g.get_all_simple_paths(head_node, to=tail_node, cutoff=max_path_length)
+    except TypeError:
+        try:
+            # Try maxlen parameter (some igraph versions)
+            paths = g.get_all_simple_paths(head_node, to=tail_node, maxlen=max_path_length)
+        except TypeError:
+            # Fallback: get all paths and filter by length
+            all_paths = g.get_all_simple_paths(head_node, to=tail_node)
+            paths = [p for p in all_paths if len(p) - 1 <= max_path_length]
+
+    if not paths:
+        # No paths found, fall back to k-hop
+        print(f"  No paths found between nodes {head_node} and {tail_node}, using k-hop fallback")
+        from torch_geometric.utils import k_hop_subgraph
+        return k_hop_subgraph(
+            node_idx=[head_node, tail_node],
+            num_hops=2,
+            edge_index=edge_index,
+            relabel_nodes=True,
+            num_nodes=num_nodes
+        )
+
+    # Extract all nodes and edges from paths
+    nodes_in_paths = set()
+    edges_in_paths = set()
+
+    for path in paths:
+        nodes_in_paths.update(path)
+        # Extract edges from path
+        for i in range(len(path) - 1):
+            # Store edges as sorted tuples for undirected graph
+            edge = tuple(sorted([path[i], path[i+1]]))
+            edges_in_paths.add(edge)
+
+    # Convert to sorted list for consistent ordering
+    subset = torch.tensor(sorted(nodes_in_paths), dtype=torch.long)
+
+    # Create node index mapping
+    old_to_new = {old_idx.item(): new_idx for new_idx, old_idx in enumerate(subset)}
+
+    # Find edges in original graph that are in our path-based subgraph
+    edge_mask = torch.zeros(edge_index.size(1), dtype=torch.bool)
+
+    for edge_idx in range(edge_index.size(1)):
+        src = edge_index[0, edge_idx].item()
+        dst = edge_index[1, edge_idx].item()
+        edge = tuple(sorted([src, dst]))
+
+        if edge in edges_in_paths:
+            edge_mask[edge_idx] = True
+
+    # Extract subgraph edges and relabel
+    sub_edge_index_list = []
+    for edge_idx in range(edge_index.size(1)):
+        if edge_mask[edge_idx]:
+            src = edge_index[0, edge_idx].item()
+            dst = edge_index[1, edge_idx].item()
+            new_src = old_to_new[src]
+            new_dst = old_to_new[dst]
+            sub_edge_index_list.append([new_src, new_dst])
+
+    if not sub_edge_index_list:
+        # Empty subgraph, fall back to k-hop
+        print(f"  Empty subgraph extracted, using k-hop fallback")
+        from torch_geometric.utils import k_hop_subgraph
+        return k_hop_subgraph(
+            node_idx=[head_node, tail_node],
+            num_hops=2,
+            edge_index=edge_index,
+            relabel_nodes=True,
+            num_nodes=num_nodes
+        )
+
+    sub_edge_index = torch.tensor(sub_edge_index_list, dtype=torch.long).t()
+
+    # Create mapping tensor for head and tail
+    mapping = torch.tensor([old_to_new[head_node], old_to_new[tail_node]], dtype=torch.long)
+
+    return subset.to(device), sub_edge_index.to(device), mapping.to(device), edge_mask
 
 
 def prepare_model_for_explanation(
@@ -535,24 +673,60 @@ def run_gnnexplainer(
     for i in range(len(triples_readable)):
         triple_start = time.time()
         print(f"\n  [{i+1}/{len(triples_readable)}] Explaining: {triples_readable[i]['triple']}")
-        print(f"      Optimizing edge mask for {epochs} epochs...", end='', flush=True)
+        print(f"      Extracting 2-hop subgraph...", end='', flush=True)
 
         # Get the edge to explain
         edge_to_explain = selected_edge_index[:, i:i+1]
         edge_type_to_explain = selected_edge_type[i:i+1]
 
         try:
-            # Run explainer
+            # Extract subgraph to reduce memory usage
             # For explanation_type='model', we explain by providing the edge endpoints as index
             # The explainer will find important neighboring edges that lead to the prediction
             head_node = edge_to_explain[0, 0].item()
             tail_node = edge_to_explain[1, 0].item()
 
+            # Choose subgraph extraction method
+            subgraph_method = gnn_params.get('subgraph_method', 'khop')
+
+            if subgraph_method == 'paths':
+                # Use igraph-based path extraction
+                max_path_length = gnn_params.get('max_path_length', 3)
+                subset, sub_edge_index, mapping, edge_mask = extract_path_based_subgraph(
+                    head_node, tail_node, edge_index, edge_type, max_path_length, device
+                )
+                print(f" Path-based subgraph (max_len={max_path_length}): ", end='', flush=True)
+            else:
+                # Use PyG k-hop subgraph extraction (default)
+                from torch_geometric.utils import k_hop_subgraph
+                khop_distance = gnn_params.get('khop_distance', 2)
+
+                subset, sub_edge_index, mapping, edge_mask = k_hop_subgraph(
+                    node_idx=[head_node, tail_node],
+                    num_hops=khop_distance,
+                    edge_index=edge_index,
+                    relabel_nodes=True,
+                    num_nodes=num_nodes
+                )
+                print(f" {khop_distance}-hop subgraph: ", end='', flush=True)
+
+            # Extract edge types for subgraph
+            sub_edge_type = edge_type[edge_mask]
+
+            # Create subgraph node features
+            sub_x = x[subset]
+
+            # Get remapped head node index
+            head_node_remapped = mapping[0].item()
+
+            print(f"{len(subset)} nodes, {sub_edge_index.size(1)} edges", end='', flush=True)
+            print(f"\n      Optimizing edge mask for {epochs} epochs...", end='', flush=True)
+
             explanation = explainer(
-                x=x,
-                edge_index=edge_index,
-                edge_type=edge_type,  # Use full graph edge types, not just the target triple
-                index=head_node  # Explain from the head node perspective
+                x=sub_x,
+                edge_index=sub_edge_index,
+                edge_type=sub_edge_type,  # Use subgraph edge types
+                index=head_node_remapped  # Explain from the remapped head node
             )
 
             triple_time = time.time() - triple_start
@@ -566,8 +740,18 @@ def run_gnnexplainer(
 
             if edge_mask is not None:
                 top_k_indices = torch.topk(edge_mask, min(top_k, len(edge_mask))).indices
-                important_edges = edge_index[:, top_k_indices]
-                important_edge_types = edge_type[top_k_indices]
+
+                # Map subgraph edges back to global graph
+                # The important edges are in the subgraph space
+                important_edges_subgraph = sub_edge_index[:, top_k_indices]
+                important_edge_types_subgraph = sub_edge_type[top_k_indices]
+
+                # Convert subgraph node indices back to global indices
+                important_edges = torch.stack([
+                    subset[important_edges_subgraph[0]],  # Map head nodes back
+                    subset[important_edges_subgraph[1]]   # Map tail nodes back
+                ])
+                important_edge_types = important_edge_types_subgraph
                 importance_scores = edge_mask[top_k_indices]
             else:
                 important_edges = None
@@ -580,7 +764,8 @@ def run_gnnexplainer(
                 'edge_mask': edge_mask,
                 'important_edges': important_edges,
                 'important_edge_types': important_edge_types,
-                'importance_scores': importance_scores
+                'importance_scores': importance_scores,
+                'subgraph_size': len(subset)
             })
 
         except Exception as e:
@@ -706,23 +891,59 @@ def run_pgexplainer(
     for i in range(len(triples_readable)):
         triple_start = time.time()
         print(f"\n  [{i+1}/{len(triples_readable)}] Explaining: {triples_readable[i]['triple']}")
-        print(f"      Generating explanation...", end='', flush=True)
+        print(f"      Extracting 2-hop subgraph...", end='', flush=True)
 
         edge_to_explain = selected_edge_index[:, i:i+1]
         edge_type_to_explain = selected_edge_type[i:i+1]
 
         try:
-            # Run explainer
+            # Extract subgraph to reduce memory usage
             # For explanation_type='model', we explain by providing the edge endpoints as index
             # The explainer will find important neighboring edges that lead to the prediction
             head_node = edge_to_explain[0, 0].item()
             tail_node = edge_to_explain[1, 0].item()
 
+            # Choose subgraph extraction method
+            subgraph_method = pg_params.get('subgraph_method', 'khop')
+
+            if subgraph_method == 'paths':
+                # Use igraph-based path extraction
+                max_path_length = pg_params.get('max_path_length', 3)
+                subset, sub_edge_index, mapping, edge_mask = extract_path_based_subgraph(
+                    head_node, tail_node, edge_index, edge_type, max_path_length, device
+                )
+                print(f" Path-based subgraph (max_len={max_path_length}): ", end='', flush=True)
+            else:
+                # Use PyG k-hop subgraph extraction (default)
+                from torch_geometric.utils import k_hop_subgraph
+                khop_distance = pg_params.get('khop_distance', 2)
+
+                subset, sub_edge_index, mapping, edge_mask = k_hop_subgraph(
+                    node_idx=[head_node, tail_node],
+                    num_hops=khop_distance,
+                    edge_index=edge_index,
+                    relabel_nodes=True,
+                    num_nodes=num_nodes
+                )
+                print(f" {khop_distance}-hop subgraph: ", end='', flush=True)
+
+            # Extract edge types for subgraph
+            sub_edge_type = edge_type[edge_mask]
+
+            # Create subgraph node features
+            sub_x = x[subset]
+
+            # Get remapped head node index
+            head_node_remapped = mapping[0].item()
+
+            print(f"{len(subset)} nodes, {sub_edge_index.size(1)} edges", end='', flush=True)
+            print(f"\n      Generating explanation...", end='', flush=True)
+
             explanation = explainer(
-                x=x,
-                edge_index=edge_index,
-                edge_type=edge_type,  # Use full graph edge types, not just the target triple
-                index=head_node  # Explain from the head node perspective
+                x=sub_x,
+                edge_index=sub_edge_index,
+                edge_type=sub_edge_type,  # Use subgraph edge types
+                index=head_node_remapped  # Explain from the remapped head node
             )
 
             triple_time = time.time() - triple_start
@@ -736,8 +957,17 @@ def run_pgexplainer(
 
             if edge_mask is not None:
                 top_k_indices = torch.topk(edge_mask, min(top_k, len(edge_mask))).indices
-                important_edges = edge_index[:, top_k_indices]
-                important_edge_types = edge_type[top_k_indices]
+
+                # Map subgraph edges back to global graph
+                important_edges_subgraph = sub_edge_index[:, top_k_indices]
+                important_edge_types_subgraph = sub_edge_type[top_k_indices]
+
+                # Convert subgraph node indices back to global indices
+                important_edges = torch.stack([
+                    subset[important_edges_subgraph[0]],
+                    subset[important_edges_subgraph[1]]
+                ])
+                important_edge_types = important_edge_types_subgraph
                 importance_scores = edge_mask[top_k_indices]
             else:
                 important_edges = None
@@ -750,7 +980,8 @@ def run_pgexplainer(
                 'edge_mask': edge_mask,
                 'important_edges': important_edges,
                 'important_edge_types': important_edge_types,
-                'importance_scores': importance_scores
+                'importance_scores': importance_scores,
+                'subgraph_size': len(subset)
             })
 
         except Exception as e:

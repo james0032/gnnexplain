@@ -6,8 +6,8 @@ from kedro.pipeline import Pipeline
 from gnn_explainer.pipelines import (
     data_preparation,
     training,
+    explanation,
     # evaluation,  # TODO: Implement
-    # explanation,  # TODO: Implement
     # metrics,  # TODO: Implement
 )
 
@@ -22,8 +22,8 @@ def register_pipelines() -> Dict[str, Pipeline]:
     # Individual pipelines
     data_prep_pipeline = data_preparation.create_pipeline()
     training_pipeline = training.create_pipeline()
+    explain_pipeline = explanation.create_pipeline()
     # eval_pipeline = evaluation.create_pipeline()  # TODO
-    # explain_pipeline = explanation.create_pipeline()  # TODO
     # metrics_pipeline = metrics.create_pipeline()  # TODO
 
     # Combined pipelines
@@ -44,8 +44,8 @@ def register_pipelines() -> Dict[str, Pipeline]:
         # Atomic pipelines
         "data_prep": data_prep_pipeline,
         "training": training_pipeline,
+        "explanation": explain_pipeline,
         # "evaluation": eval_pipeline,  # TODO
-        # "explanation": explain_pipeline,  # TODO
         # "metrics": metrics_pipeline,  # TODO
 
         # Combined workflows

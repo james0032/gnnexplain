@@ -93,6 +93,10 @@ explanation_summary:
 # Model Outputs (07_model_output)
 # =============================================================================
 
+test_triple_scores:
+  type: pickle.PickleDataset
+  filepath: data/07_model_output/test_triple_scores.pkl
+
 accuracy_metric:
   type: pickle.PickleDataset
   filepath: data/07_model_output/accuracy.pkl

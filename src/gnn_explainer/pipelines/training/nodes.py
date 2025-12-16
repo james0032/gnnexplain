@@ -281,3 +281,122 @@ def train_model(
             'best_epoch': epoch + 1 - patience_counter,
         }
     }
+
+
+def compute_test_scores(
+    trained_model_artifact: Dict,
+    pyg_data: Dict,
+    device_str: str,
+    batch_size: int = 1024
+) -> Dict:
+    """
+    Compute prediction scores for test triples.
+
+    Args:
+        trained_model_artifact: Trained model artifact from training
+        pyg_data: PyG format graph data
+        device_str: Device string ("cuda" or "cpu")
+        batch_size: Batch size for scoring
+
+    Returns:
+        Dictionary with test triples and their prediction scores
+    """
+    print("\n" + "="*60)
+    print("COMPUTING TEST TRIPLE SCORES")
+    print("="*60)
+
+    device = torch.device(device_str if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+
+    # Extract model configuration
+    model_state_dict = trained_model_artifact['model_state_dict']
+    model_config = trained_model_artifact['model_config']
+
+    # Reconstruct model
+    model_type = model_config.get('model_type', 'rgcn')
+    decoder_type = model_config.get('decoder_type', 'distmult')
+
+    print(f"\nLoading model...")
+    print(f"  Model type: {model_type}")
+    print(f"  Decoder type: {decoder_type}")
+
+    if model_type == 'compgcn':
+        conve_kwargs = None
+        if decoder_type == 'conve':
+            conve_kwargs = {
+                'input_drop': model_config.get('conve_input_drop', 0.2),
+                'hidden_drop': model_config.get('conve_hidden_drop', 0.3),
+                'feature_drop': model_config.get('conve_feature_drop', 0.2),
+                'num_filters': model_config.get('conve_num_filters', 32),
+                'kernel_size': model_config.get('conve_kernel_size', 3),
+            }
+
+        model = CompGCNKGModel(
+            num_nodes=model_config['num_nodes'],
+            num_relations=model_config['num_relations'],
+            embedding_dim=model_config['embedding_dim'],
+            decoder_type=decoder_type,
+            num_layers=model_config['num_layers'],
+            comp_fn=model_config.get('comp_fn', 'sub'),
+            dropout=model_config['dropout'],
+            conve_kwargs=conve_kwargs
+        ).to(device)
+
+    else:  # rgcn
+        model = RGCNDistMultModel(
+            num_nodes=model_config['num_nodes'],
+            num_relations=model_config['num_relations'],
+            embedding_dim=model_config['embedding_dim'],
+            num_layers=model_config['num_layers'],
+            num_bases=model_config.get('num_bases', 30),
+            dropout=model_config['dropout']
+        ).to(device)
+
+    # Load state dict
+    model.load_state_dict(model_state_dict)
+    model.eval()
+
+    # Move graph data to device
+    edge_index = pyg_data['edge_index'].to(device)
+    edge_type = pyg_data['edge_type'].to(device)
+    test_triples = pyg_data['test_triples']
+
+    print(f"\nScoring {len(test_triples)} test triples...")
+
+    # Compute scores
+    all_scores = []
+    num_batches = (len(test_triples) + batch_size - 1) // batch_size
+
+    with torch.no_grad():
+        for batch_idx, i in enumerate(range(0, len(test_triples), batch_size), 1):
+            batch_triples = test_triples[i:i+batch_size].to(device)
+
+            scores = model(
+                edge_index, edge_type,
+                batch_triples[:, 0],  # heads
+                batch_triples[:, 2],  # tails
+                batch_triples[:, 1]   # relations
+            )
+
+            all_scores.extend(scores.cpu().tolist())
+
+            # Print progress every 10 batches
+            if batch_idx % 10 == 0 or batch_idx == num_batches:
+                print(f"  Processed {batch_idx}/{num_batches} batches", flush=True)
+
+    # Convert to tensor
+    all_scores_tensor = torch.tensor(all_scores)
+
+    print(f"\n✓ Scoring complete")
+    print(f"  Total triples scored: {len(all_scores)}")
+    print(f"  Score range: [{all_scores_tensor.min():.4f}, {all_scores_tensor.max():.4f}]")
+    print(f"  Mean score: {all_scores_tensor.mean():.4f}")
+
+    print("\n" + "="*60)
+
+    return {
+        'test_triples': test_triples.cpu(),
+        'scores': all_scores_tensor,
+        'model_type': model_type,
+        'decoder_type': decoder_type,
+    }

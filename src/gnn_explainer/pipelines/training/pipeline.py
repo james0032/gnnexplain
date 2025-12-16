@@ -1,7 +1,7 @@
 """Training pipeline definition."""
 
 from kedro.pipeline import Pipeline, pipeline, node
-from .nodes import train_model
+from .nodes import train_model, compute_test_scores
 
 
 def create_pipeline(**kwargs) -> Pipeline:
@@ -23,5 +23,15 @@ def create_pipeline(**kwargs) -> Pipeline:
             ],
             outputs="trained_model_artifact",
             name="train_model",
+        ),
+        node(
+            func=compute_test_scores,
+            inputs=[
+                "trained_model_artifact",
+                "pyg_data",
+                "params:device"
+            ],
+            outputs="test_triple_scores",
+            name="compute_test_scores",
         ),
     ])

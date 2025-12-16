@@ -151,10 +151,19 @@ def create_knowledge_graph(
         triple_data['test_triples']
     ], dim=0)
 
+    # Create reverse mappings for easy lookup
+    node_dict = dictionaries['node_dict']
+    rel_dict = dictionaries['rel_dict']
+
+    idx_to_entity = {v: k for k, v in node_dict.items()}
+    idx_to_relation = {v: k for k, v in rel_dict.items()}
+
     kg_data = {
         **triple_data,
         **dictionaries,
-        'all_triples': all_triples
+        'all_triples': all_triples,
+        'idx_to_entity': idx_to_entity,
+        'idx_to_relation': idx_to_relation
     }
 
     print(f"  Total triples: {len(all_triples)}")

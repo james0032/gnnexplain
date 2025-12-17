@@ -949,10 +949,11 @@ def run_pgexplainer(
     print(f"      then generates explanations efficiently for all instances.")
 
     # Create explainer
+    # PGExplainer requires 'phenomenon' explanation type instead of 'model'
     explainer = Explainer(
         model=wrapped_model,
         algorithm=PGExplainer(epochs=epochs, lr=lr),
-        explanation_type='model',
+        explanation_type='phenomenon',
         edge_mask_type='object',
         model_config=dict(
             mode='regression',
@@ -1421,18 +1422,21 @@ def run_page_explainer(
 
 
 def summarize_explanations(
-    gnn_explanations: Dict,
-    pg_explanations: Dict,
-    knowledge_graph: Dict,
+    gnn_explanations: Optional[Dict] = None,
+    pg_explanations: Optional[Dict] = None,
+    knowledge_graph: Dict = None,
     page_explanations: Optional[Dict] = None
 ) -> Dict:
     """
     Summarize and compare explanations from different explainers.
 
+    All explainer outputs are optional - only available explainers will be summarized.
+
     Args:
-        gnn_explanations: GNNExplainer results
-        pg_explanations: PGExplainer results
+        gnn_explanations: GNNExplainer results (optional)
+        pg_explanations: PGExplainer results (optional)
         knowledge_graph: Knowledge graph with dictionaries
+        page_explanations: PAGE explainer results (optional)
 
     Returns:
         Summary dictionary with comparisons and insights
@@ -1442,18 +1446,29 @@ def summarize_explanations(
     print("="*60)
 
     summary = {
-        'gnn_explainer': {
+        'explainers_run': [],
+        'comparisons': []
+    }
+
+    # Add GNNExplainer if available
+    if gnn_explanations is not None:
+        summary['gnn_explainer'] = {
             'num_explanations': gnn_explanations['num_explanations'],
             'successful': sum(1 for e in gnn_explanations['explanations'] if 'error' not in e),
             'failed': sum(1 for e in gnn_explanations['explanations'] if 'error' in e)
-        },
-        'pg_explainer': {
+        }
+        summary['explainers_run'].append('gnn_explainer')
+        print(f"\nGNNExplainer: {summary['gnn_explainer']['successful']}/{summary['gnn_explainer']['num_explanations']} successful")
+
+    # Add PGExplainer if available
+    if pg_explanations is not None:
+        summary['pg_explainer'] = {
             'num_explanations': pg_explanations['num_explanations'],
             'successful': sum(1 for e in pg_explanations['explanations'] if 'error' not in e),
             'failed': sum(1 for e in pg_explanations['explanations'] if 'error' in e)
-        },
-        'comparisons': []
-    }
+        }
+        summary['explainers_run'].append('pg_explainer')
+        print(f"PGExplainer: {summary['pg_explainer']['successful']}/{summary['pg_explainer']['num_explanations']} successful")
 
     # Add PAGE if available
     if page_explanations is not None:
@@ -1462,72 +1477,76 @@ def summarize_explanations(
             'successful': sum(1 for e in page_explanations['explanations'] if 'error' not in e),
             'failed': sum(1 for e in page_explanations['explanations'] if 'error' in e)
         }
-
-    print(f"\nGNNExplainer: {summary['gnn_explainer']['successful']}/{summary['gnn_explainer']['num_explanations']} successful")
-    print(f"PGExplainer: {summary['pg_explainer']['successful']}/{summary['pg_explainer']['num_explanations']} successful")
-    if page_explanations is not None:
+        summary['explainers_run'].append('page_explainer')
         print(f"PAGE Explainer: {summary['page_explainer']['successful']}/{summary['page_explainer']['num_explanations']} successful")
+
+    # Skip comparison if less than 2 explainers were run
+    if len(summary['explainers_run']) < 2:
+        print(f"\nOnly {len(summary['explainers_run'])} explainer(s) run - skipping comparison")
+        return summary
 
     # Compare explanations for each triple
     print(f"\nComparing explanations...")
 
-    for gnn_exp, pg_exp in zip(gnn_explanations['explanations'], pg_explanations['explanations']):
-        if 'error' in gnn_exp or 'error' in pg_exp:
-            continue
+    # Get any available explanations list to iterate over
+    if gnn_explanations is not None and pg_explanations is not None:
+        # Compare GNN vs PG
+        for gnn_exp, pg_exp in zip(gnn_explanations['explanations'], pg_explanations['explanations']):
+            if 'error' in gnn_exp or 'error' in pg_exp:
+                continue
 
-        triple = gnn_exp['triple']
+            triple = gnn_exp['triple']
 
-        # Compare important edges
-        comparison = {
-            'triple': triple['triple'],
-            'gnn_top_edges': [],
-            'pg_top_edges': [],
-            'overlap': 0
-        }
+            # Compare important edges
+            comparison = {
+                'triple': triple['triple'],
+                'gnn_top_edges': [],
+                'pg_top_edges': [],
+                'overlap': 0
+            }
 
-        # Get top edges from each explainer
-        if gnn_exp.get('important_edges') is not None:
-            for j in range(min(5, len(gnn_exp['importance_scores']))):
-                head = gnn_exp['important_edges'][0, j].item()
-                tail = gnn_exp['important_edges'][1, j].item()
-                rel = gnn_exp['important_edge_types'][j].item()
-                score = gnn_exp['importance_scores'][j].item()
+            # Get top edges from each explainer
+            if gnn_exp.get('important_edges') is not None:
+                for j in range(min(5, len(gnn_exp['importance_scores']))):
+                    head = gnn_exp['important_edges'][0, j].item()
+                    tail = gnn_exp['important_edges'][1, j].item()
+                    rel = gnn_exp['important_edge_types'][j].item()
+                    score = gnn_exp['importance_scores'][j].item()
 
-                head_name = knowledge_graph.get('idx_to_entity', {}).get(head, f"node_{head}")
-                tail_name = knowledge_graph.get('idx_to_entity', {}).get(tail, f"node_{tail}")
-                rel_name = knowledge_graph.get('idx_to_relation', {}).get(rel, f"rel_{rel}")
+                    head_name = knowledge_graph.get('idx_to_entity', {}).get(head, f"node_{head}")
+                    tail_name = knowledge_graph.get('idx_to_entity', {}).get(tail, f"node_{tail}")
+                    rel_name = knowledge_graph.get('idx_to_relation', {}).get(rel, f"rel_{rel}")
 
-                comparison['gnn_top_edges'].append({
-                    'edge': f"({head_name}, {rel_name}, {tail_name})",
-                    'score': score
-                })
+                    comparison['gnn_top_edges'].append({
+                        'edge': f"({head_name}, {rel_name}, {tail_name})",
+                        'score': score
+                    })
 
-        if pg_exp.get('important_edges') is not None:
-            for j in range(min(5, len(pg_exp['importance_scores']))):
-                head = pg_exp['important_edges'][0, j].item()
-                tail = pg_exp['important_edges'][1, j].item()
-                rel = pg_exp['important_edge_types'][j].item()
-                score = pg_exp['importance_scores'][j].item()
+            if pg_exp.get('important_edges') is not None:
+                for j in range(min(5, len(pg_exp['importance_scores']))):
+                    head = pg_exp['important_edges'][0, j].item()
+                    tail = pg_exp['important_edges'][1, j].item()
+                    rel = pg_exp['important_edge_types'][j].item()
+                    score = pg_exp['importance_scores'][j].item()
 
-                head_name = knowledge_graph.get('idx_to_entity', {}).get(head, f"node_{head}")
-                tail_name = knowledge_graph.get('idx_to_entity', {}).get(tail, f"node_{tail}")
-                rel_name = knowledge_graph.get('idx_to_relation', {}).get(rel, f"rel_{rel}")
+                    head_name = knowledge_graph.get('idx_to_entity', {}).get(head, f"node_{head}")
+                    tail_name = knowledge_graph.get('idx_to_entity', {}).get(tail, f"node_{tail}")
+                    rel_name = knowledge_graph.get('idx_to_relation', {}).get(rel, f"rel_{rel}")
 
-                comparison['pg_top_edges'].append({
-                    'edge': f"({head_name}, {rel_name}, {tail_name})",
-                    'score': score
-                })
+                    comparison['pg_top_edges'].append({
+                        'edge': f"({head_name}, {rel_name}, {tail_name})",
+                        'score': score
+                    })
 
-        # Calculate overlap
-        gnn_edges_set = set(e['edge'] for e in comparison['gnn_top_edges'])
-        pg_edges_set = set(e['edge'] for e in comparison['pg_top_edges'])
-        comparison['overlap'] = len(gnn_edges_set & pg_edges_set)
+            # Calculate overlap
+            gnn_edges_set = set(e['edge'] for e in comparison['gnn_top_edges'])
+            pg_edges_set = set(e['edge'] for e in comparison['pg_top_edges'])
+            comparison['overlap'] = len(gnn_edges_set & pg_edges_set)
 
-        summary['comparisons'].append(comparison)
-
-    print(f"✓ Compared {len(summary['comparisons'])} explanations")
+            summary['comparisons'].append(comparison)
 
     if summary['comparisons']:
+        print(f"✓ Compared {len(summary['comparisons'])} explanations")
         avg_overlap = sum(c['overlap'] for c in summary['comparisons']) / len(summary['comparisons'])
         print(f"\nAverage overlap in top-5 important edges: {avg_overlap:.2f}")
 

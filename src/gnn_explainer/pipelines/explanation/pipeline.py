@@ -13,20 +13,30 @@ from .nodes import (
 
 def create_pipeline(**kwargs) -> Pipeline:
     """
-    Create explanation pipeline.
+    Create explanation pipeline with configurable explainer selection.
 
     This pipeline:
     1. Loads the trained model and prepares it for explanation
     2. Selects triples (edges) to explain
-    3. Runs GNNExplainer to generate explanations
-    4. Runs PGExplainer to generate explanations
-    5. Runs PAGE explainer to generate explanations
-    6. Summarizes and compares explanations
+    3. Runs selected explainers (GNNExplainer, PGExplainer, PAGE)
+    4. Summarizes and compares explanations
+
+    To run specific explainers, use Kedro's tag filtering:
+      - Run only PAGE (no summary):
+          kedro run --pipeline=explanation --tags=page --exclude-tags=summary
+      - Run GNN and PG (no summary):
+          kedro run --pipeline=explanation --tags=gnnexplainer,pgexplainer --exclude-tags=summary
+      - Run all explainers + summary:
+          kedro run --pipeline=explanation
+
+    Note: The summary node requires all three explainer outputs. When running
+    specific explainers, use --exclude-tags=summary to skip the summary step.
 
     Returns:
         Kedro Pipeline
     """
-    return Pipeline([
+    # Common nodes that always run
+    common_nodes = [
         # Step 1: Prepare model for explanation
         node(
             func=prepare_model_for_explanation,
@@ -52,8 +62,11 @@ def create_pipeline(**kwargs) -> Pipeline:
             outputs="selected_triples",
             name="select_triples_to_explain"
         ),
+    ]
 
-        # Step 3: Run GNNExplainer
+    # Explainer nodes with tags for selective execution
+    explainer_nodes = [
+        # GNNExplainer node
         node(
             func=run_gnnexplainer,
             inputs=[
@@ -62,10 +75,11 @@ def create_pipeline(**kwargs) -> Pipeline:
                 "params:explanation"
             ],
             outputs="gnn_explanations",
-            name="run_gnnexplainer"
+            name="run_gnnexplainer",
+            tags=["gnnexplainer", "explainer"]
         ),
 
-        # Step 4: Run PGExplainer
+        # PGExplainer node
         node(
             func=run_pgexplainer,
             inputs=[
@@ -75,10 +89,11 @@ def create_pipeline(**kwargs) -> Pipeline:
                 "params:explanation"
             ],
             outputs="pg_explanations",
-            name="run_pgexplainer"
+            name="run_pgexplainer",
+            tags=["pgexplainer", "explainer"]
         ),
 
-        # Step 5: Run PAGE Explainer
+        # PAGE Explainer node
         node(
             func=run_page_explainer,
             inputs=[
@@ -88,10 +103,18 @@ def create_pipeline(**kwargs) -> Pipeline:
                 "params:explanation"
             ],
             outputs="page_explanations",
-            name="run_page_explainer"
+            name="run_page_explainer",
+            tags=["page", "explainer"]
         ),
+    ]
 
-        # Step 6: Summarize explanations
+    # Summary node
+    # Note: When using tag filtering to run specific explainers, the summary node
+    # will fail if it's included. To run specific explainers without summarizing:
+    #   kedro run --pipeline=explanation --tags=page --exclude-tags=summary
+    # To run all explainers and summarize:
+    #   kedro run --pipeline=explanation
+    summary_nodes = [
         node(
             func=summarize_explanations,
             inputs=[
@@ -101,6 +124,12 @@ def create_pipeline(**kwargs) -> Pipeline:
                 "page_explanations"
             ],
             outputs="explanation_summary",
-            name="summarize_explanations"
+            name="summarize_explanations",
+            tags=["summary"]
         )
-    ])
+    ]
+
+    # Build the full pipeline
+    all_nodes = common_nodes + explainer_nodes + summary_nodes
+
+    return Pipeline(all_nodes)

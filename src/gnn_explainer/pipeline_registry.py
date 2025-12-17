@@ -19,10 +19,22 @@ def register_pipelines() -> Dict[str, Pipeline]:
     Returns:
         A mapping from pipeline names to ``Pipeline`` objects.
     """
+    from kedro.framework.project import settings
+    from kedro.config import OmegaConfigLoader
+
+    # Load parameters to get enabled_explainers
+    conf_loader = OmegaConfigLoader(
+        conf_source=str(settings.CONF_SOURCE),
+        base_env="base",
+        default_run_env="local"
+    )
+    params = conf_loader["parameters"]
+    enabled_explainers = params.get("explanation", {}).get("enabled_explainers", ["all"])
+
     # Individual pipelines
     data_prep_pipeline = data_preparation.create_pipeline()
     training_pipeline = training.create_pipeline()
-    explain_pipeline = explanation.create_pipeline()
+    explain_pipeline = explanation.create_pipeline(enabled_explainers=enabled_explainers)
     # eval_pipeline = evaluation.create_pipeline()  # TODO
     # metrics_pipeline = metrics.create_pipeline()  # TODO
 

@@ -18,19 +18,16 @@ def create_pipeline(**kwargs) -> Pipeline:
     This pipeline:
     1. Loads the trained model and prepares it for explanation
     2. Selects triples (edges) to explain
-    3. Runs selected explainers (GNNExplainer, PGExplainer, PAGE)
-    4. Summarizes and compares explanations
+    3. Runs selected explainers based on params:explanation.enabled_explainers
+    4. Summarizes and compares explanations (if multiple explainers enabled)
 
-    To run specific explainers, use Kedro's tag filtering:
-      - Run only PAGE (no summary):
-          kedro run --pipeline=explanation --tags=page --exclude-tags=summary
-      - Run GNN and PG (no summary):
-          kedro run --pipeline=explanation --tags=gnnexplainer,pgexplainer --exclude-tags=summary
-      - Run all explainers + summary:
-          kedro run --pipeline=explanation
+    The enabled_explainers parameter controls which explainers run:
+      - Set in conf/base/parameters.yml under explanation.enabled_explainers
+      - Options: ["gnnexplainer"], ["pgexplainer"], ["page"], or any combination
+      - Use ["all"] to run all explainers
 
-    Note: The summary node requires all three explainer outputs. When running
-    specific explainers, use --exclude-tags=summary to skip the summary step.
+    You can still use Kedro's tag filtering to override:
+      - kedro run --pipeline=explanation --tags=page --exclude-tags=summary
 
     Returns:
         Kedro Pipeline
@@ -64,70 +61,89 @@ def create_pipeline(**kwargs) -> Pipeline:
         ),
     ]
 
-    # Explainer nodes with tags for selective execution
-    explainer_nodes = [
-        # GNNExplainer node
-        node(
-            func=run_gnnexplainer,
-            inputs=[
-                "prepared_model",
-                "selected_triples",
-                "params:explanation"
-            ],
-            outputs="gnn_explanations",
-            name="run_gnnexplainer",
-            tags=["gnnexplainer", "explainer"]
-        ),
+    # Get enabled explainers from parameters
+    enabled_explainers = kwargs.get("enabled_explainers", ["all"])
 
-        # PGExplainer node
-        node(
-            func=run_pgexplainer,
-            inputs=[
-                "prepared_model",
-                "selected_triples",
-                "pyg_data",
-                "params:explanation"
-            ],
-            outputs="pg_explanations",
-            name="run_pgexplainer",
-            tags=["pgexplainer", "explainer"]
-        ),
+    # If "all" is specified, enable all explainers
+    if "all" in enabled_explainers:
+        enabled_explainers = ["gnnexplainer", "pgexplainer", "page"]
 
-        # PAGE Explainer node
-        node(
-            func=run_page_explainer,
-            inputs=[
-                "prepared_model",
-                "selected_triples",
-                "pyg_data",
-                "params:explanation"
-            ],
-            outputs="page_explanations",
-            name="run_page_explainer",
-            tags=["page", "explainer"]
-        ),
-    ]
+    # Build explainer nodes based on enabled_explainers parameter
+    explainer_nodes = []
 
-    # Summary node
-    # Note: When using tag filtering to run specific explainers, the summary node
-    # will fail if it's included. To run specific explainers without summarizing:
-    #   kedro run --pipeline=explanation --tags=page --exclude-tags=summary
-    # To run all explainers and summarize:
-    #   kedro run --pipeline=explanation
-    summary_nodes = [
-        node(
-            func=summarize_explanations,
-            inputs=[
-                "gnn_explanations",
-                "pg_explanations",
-                "knowledge_graph",
-                "page_explanations"
-            ],
-            outputs="explanation_summary",
-            name="summarize_explanations",
-            tags=["summary"]
+    # GNNExplainer node
+    if "gnnexplainer" in enabled_explainers:
+        explainer_nodes.append(
+            node(
+                func=run_gnnexplainer,
+                inputs=[
+                    "prepared_model",
+                    "selected_triples",
+                    "params:explanation"
+                ],
+                outputs="gnn_explanations",
+                name="run_gnnexplainer",
+                tags=["gnnexplainer", "explainer"]
+            )
         )
-    ]
+
+    # PGExplainer node
+    if "pgexplainer" in enabled_explainers:
+        explainer_nodes.append(
+            node(
+                func=run_pgexplainer,
+                inputs=[
+                    "prepared_model",
+                    "selected_triples",
+                    "pyg_data",
+                    "params:explanation"
+                ],
+                outputs="pg_explanations",
+                name="run_pgexplainer",
+                tags=["pgexplainer", "explainer"]
+            )
+        )
+
+    # PAGE Explainer node
+    if "page" in enabled_explainers:
+        explainer_nodes.append(
+            node(
+                func=run_page_explainer,
+                inputs=[
+                    "prepared_model",
+                    "selected_triples",
+                    "pyg_data",
+                    "params:explanation"
+                ],
+                outputs="page_explanations",
+                name="run_page_explainer",
+                tags=["page", "explainer"]
+            )
+        )
+
+    # Summary node - only include if multiple explainers are enabled
+    # The summary node requires outputs from all enabled explainers
+    summary_nodes = []
+    if len(enabled_explainers) > 1:
+        # Build inputs list based on which explainers are enabled
+        summary_inputs = []
+        if "gnnexplainer" in enabled_explainers:
+            summary_inputs.append("gnn_explanations")
+        if "pgexplainer" in enabled_explainers:
+            summary_inputs.append("pg_explanations")
+        summary_inputs.append("knowledge_graph")  # Always needed
+        if "page" in enabled_explainers:
+            summary_inputs.append("page_explanations")
+
+        summary_nodes = [
+            node(
+                func=summarize_explanations,
+                inputs=summary_inputs,
+                outputs="explanation_summary",
+                name="summarize_explanations",
+                tags=["summary"]
+            )
+        ]
 
     # Build the full pipeline
     all_nodes = common_nodes + explainer_nodes + summary_nodes

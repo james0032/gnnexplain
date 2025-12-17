@@ -635,6 +635,8 @@ def run_gnnexplainer(
     print("RUNNING GNNExplainer")
     print("="*60)
 
+    import traceback as tb_module  # Import at top of function
+
     device = model_dict['device']
     wrapped_model = model_dict['wrapped_model']
     edge_index = model_dict['edge_index']
@@ -810,10 +812,14 @@ def run_gnnexplainer(
         except Exception as e:
             triple_time = time.time() - triple_start
             print(f" Failed in {triple_time:.1f}s")
-            print(f"    ✗ Error: {str(e)}")
+            print(f"    ✗ Error type: {type(e).__name__}")
+            print(f"    ✗ Error message: {str(e) if str(e) else '(empty error message)'}")
+            print(f"    Full traceback:")
+            tb_module.print_exc()
             explanations.append({
                 'triple': triples_readable[i],
-                'error': str(e)
+                'error': str(e) if str(e) else f"{type(e).__name__} (no message)",
+                'error_type': type(e).__name__
             })
 
         # Show progress estimate
@@ -860,6 +866,8 @@ def run_pgexplainer(
     print("\n" + "="*60)
     print("RUNNING PGExplainer")
     print("="*60)
+
+    import traceback as tb_module  # Import at top of function
 
     device = model_dict['device']
     wrapped_model = model_dict['wrapped_model']
@@ -1049,10 +1057,14 @@ def run_pgexplainer(
         except Exception as e:
             triple_time = time.time() - triple_start
             print(f" Failed in {triple_time:.1f}s")
-            print(f"    ✗ Error: {str(e)}")
+            print(f"    ✗ Error type: {type(e).__name__}")
+            print(f"    ✗ Error message: {str(e) if str(e) else '(empty error message)'}")
+            print(f"    Full traceback:")
+            tb_module.print_exc()
             explanations.append({
                 'triple': triples_readable[i],
-                'error': str(e)
+                'error': str(e) if str(e) else f"{type(e).__name__} (no message)",
+                'error_type': type(e).__name__
             })
 
         # Show progress estimate

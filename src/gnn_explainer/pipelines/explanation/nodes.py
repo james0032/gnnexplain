@@ -56,41 +56,67 @@ class ModelWrapper(nn.Module):
             # 1. Encode on the subgraph edges (for GNNExplainer's edge masking to work)
             # 2. But use global node IDs so CompGCN can access the right embeddings
 
-            # Map the relabeled edge_index back to global indices for encoding
-            if self.current_subset is not None:
-                # Convert subgraph edge indices to global indices
-                edge_index_global = torch.stack([
-                    self.current_subset[edge_index[0]],
-                    self.current_subset[edge_index[1]]
-                ])
-            else:
-                # Fallback: assume indices are already global
-                edge_index_global = edge_index
-
             # Get edge types for the subgraph
             edge_type_for_encoding = kwargs.get('edge_type', None)
             if edge_type_for_encoding is None:
                 # Fallback: assume relation 0
                 edge_type_for_encoding = torch.zeros(edge_index.size(1), dtype=torch.long, device=edge_index.device)
 
-            # Encode using SUBGRAPH edges with global node indices
-            # This allows GNNExplainer to apply edge masks during message passing
-            node_emb, rel_emb = self.kg_model.encode(edge_index_global, edge_type_for_encoding)
+            # CRITICAL FIX: GNNExplainer expects contiguous node indices (0 to N-1)
+            # but CompGCN needs to access the actual node embeddings.
+            # Solution: Extract the relevant node embeddings and create a relabeled encoder call
 
-            # For decoding, we use the subgraph edges
+            if self.current_subset is not None:
+                # Get the full node embeddings (before message passing)
+                if hasattr(self.kg_model, 'encoder'):
+                    full_node_emb = self.kg_model.encoder.node_emb  # CompGCN
+                    full_rel_emb = self.kg_model.encoder.rel_emb
+                else:
+                    full_node_emb = self.kg_model.node_emb  # RGCN fallback
+                    full_rel_emb = self.kg_model.rel_emb
+
+                # Create a subset embedding matrix for just the subgraph nodes
+                # This creates a contiguous embedding matrix [0, 1, 2, ..., len(subset)-1]
+                # mapped from the global embeddings
+                subset_node_emb = full_node_emb[self.current_subset]
+
+                # Now encode using the RELABELED edge_index (0 to len(subset)-1)
+                # with the subset embeddings
+                # We need to temporarily replace the model's embeddings
+                original_node_emb = full_node_emb.data.clone()
+
+                # Create a temporary full-size embedding tensor but only populate the used indices
+                temp_node_emb = torch.zeros_like(full_node_emb)
+                temp_node_emb[:len(subset_node_emb)] = subset_node_emb
+
+                # Temporarily replace the embeddings
+                if hasattr(self.kg_model, 'encoder'):
+                    self.kg_model.encoder.node_emb.data = temp_node_emb
+                else:
+                    self.kg_model.node_emb.data = temp_node_emb
+
+                try:
+                    # Encode with relabeled indices
+                    node_emb, rel_emb = self.kg_model.encode(edge_index, edge_type_for_encoding)
+
+                    # Extract only the embeddings we need (for the subgraph nodes)
+                    node_emb_subset = node_emb[:len(self.current_subset)]
+                finally:
+                    # Restore original embeddings
+                    if hasattr(self.kg_model, 'encoder'):
+                        self.kg_model.encoder.node_emb.data = original_node_emb
+                    else:
+                        self.kg_model.node_emb.data = original_node_emb
+            else:
+                # No subset mapping, use original behavior
+                node_emb_subset, rel_emb = self.kg_model.encode(edge_index, edge_type_for_encoding)
+
+            # For decoding, we use the relabeled subgraph indices directly
             head_idx_subgraph = edge_index[0]
             tail_idx_subgraph = edge_index[1]
 
-            # Map to global indices for accessing embeddings
-            if self.current_subset is not None:
-                head_idx_global = self.current_subset[head_idx_subgraph]
-                tail_idx_global = self.current_subset[tail_idx_subgraph]
-            else:
-                head_idx_global = head_idx_subgraph
-                tail_idx_global = tail_idx_subgraph
-
-            # Decode using embeddings with global indices
-            scores = self.kg_model.decode(node_emb, rel_emb, head_idx_global, tail_idx_global, edge_type_for_encoding)
+            # Decode using subset embeddings with relabeled indices
+            scores = self.kg_model.decode(node_emb_subset, rel_emb, head_idx_subgraph, tail_idx_subgraph, edge_type_for_encoding)
 
             return scores
         else:

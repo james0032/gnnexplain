@@ -173,8 +173,9 @@ def extract_path_based_subgraph(
     edge_list = edge_index.t().cpu().numpy()  # [num_edges, 2]
     num_nodes = edge_index.max().item() + 1
 
-    # Build undirected igraph
-    g = ig.Graph(n=num_nodes, edges=edge_list.tolist(), directed=False)
+    # Build DIRECTED igraph to preserve edge directionality
+    # Knowledge graphs are inherently directed (head -> relation -> tail)
+    g = ig.Graph(n=num_nodes, edges=edge_list.tolist(), directed=True)
 
     # Find all simple paths between head and tail
     try:
@@ -207,10 +208,10 @@ def extract_path_based_subgraph(
 
     for path in paths:
         nodes_in_paths.update(path)
-        # Extract edges from path
+        # Extract edges from path (preserve direction for directed graph)
         for i in range(len(path) - 1):
-            # Store edges as sorted tuples for undirected graph
-            edge = tuple(sorted([path[i], path[i+1]]))
+            # Store directed edges as (src, dst) tuples
+            edge = (path[i], path[i+1])
             edges_in_paths.add(edge)
 
     # Convert to sorted list for consistent ordering
@@ -225,7 +226,8 @@ def extract_path_based_subgraph(
     for edge_idx in range(edge_index.size(1)):
         src = edge_index[0, edge_idx].item()
         dst = edge_index[1, edge_idx].item()
-        edge = tuple(sorted([src, dst]))
+        # Use directed edge (src -> dst) for matching
+        edge = (src, dst)
 
         if edge in edges_in_paths:
             edge_mask[edge_idx] = True

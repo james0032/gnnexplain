@@ -645,10 +645,16 @@ def run_gnnexplainer(
     gnn_params = explainer_params.get('gnnexplainer', {})
     epochs = gnn_params.get('gnn_epochs', 200)
     lr = gnn_params.get('gnn_lr', 0.01)
+    subgraph_method = gnn_params.get('subgraph_method', 'khop')
 
     print(f"\nGNNExplainer configuration:")
     print(f"  Epochs: {epochs}")
     print(f"  Learning rate: {lr}")
+    print(f"  Subgraph method: {subgraph_method}")
+    if subgraph_method == 'paths':
+        print(f"  Max path length: {gnn_params.get('max_path_length', 3)}")
+    else:
+        print(f"  K-hop distance: {gnn_params.get('khop_distance', 2)}")
 
     # Create explainer
     explainer = Explainer(
@@ -701,9 +707,7 @@ def run_gnnexplainer(
             head_node = edge_to_explain[0, 0].item()
             tail_node = edge_to_explain[1, 0].item()
 
-            # Choose subgraph extraction method
-            subgraph_method = gnn_params.get('subgraph_method', 'khop')
-
+            # Use subgraph extraction method from config
             if subgraph_method == 'paths':
                 # Use igraph-based path extraction
                 max_path_length = gnn_params.get('max_path_length', 3)
@@ -867,10 +871,16 @@ def run_pgexplainer(
     pg_params = explainer_params.get('pgexplainer', {})
     epochs = pg_params.get('pg_epochs', 30)
     lr = pg_params.get('pg_lr', 0.003)
+    subgraph_method = pg_params.get('subgraph_method', 'khop')
 
     print(f"\nPGExplainer configuration:")
     print(f"  Training epochs: {epochs}")
     print(f"  Learning rate: {lr}")
+    print(f"  Subgraph method: {subgraph_method}")
+    if subgraph_method == 'paths':
+        print(f"  Max path length: {pg_params.get('max_path_length', 3)}")
+    else:
+        print(f"  K-hop distance: {pg_params.get('khop_distance', 2)}")
     print(f"\nNote: PGExplainer trains an explainer network once,")
     print(f"      then generates explanations efficiently for all instances.")
 
@@ -938,9 +948,7 @@ def run_pgexplainer(
             head_node = edge_to_explain[0, 0].item()
             tail_node = edge_to_explain[1, 0].item()
 
-            # Choose subgraph extraction method
-            subgraph_method = pg_params.get('subgraph_method', 'khop')
-
+            # Use subgraph extraction method from config
             if subgraph_method == 'paths':
                 # Use igraph-based path extraction
                 max_path_length = pg_params.get('max_path_length', 3)

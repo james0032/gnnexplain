@@ -462,8 +462,9 @@ def extract_link_subgraph(
     """
     if method == 'paths' and edge_type is not None:
         # Use path-based extraction (same as in nodes.py)
+        print(f"  Using path-based subgraph extraction (max_path_length={max_path_length})")
         try:
-            from ..explanation.nodes import extract_path_based_subgraph
+            from gnn_explainer.pipelines.explanation.nodes import extract_path_based_subgraph
 
             # Extract path-based subgraph
             device = edge_index.device
@@ -491,9 +492,12 @@ def extract_link_subgraph(
 
         except Exception as e:
             print(f"Warning: Path-based extraction failed ({e}), falling back to k-hop")
+            import traceback
+            traceback.print_exc()
             # Fall through to k-hop method
 
     # K-hop method (default)
+    print(f"  Using k-hop subgraph extraction (num_hops={num_hops})")
     head_nodes, _ = extract_k_hop_subgraph(edge_index, head_idx, num_hops, num_nodes)
     tail_nodes, _ = extract_k_hop_subgraph(edge_index, tail_idx, num_hops, num_nodes)
 

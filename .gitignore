@@ -64,3 +64,6 @@ explanations/
 
 # Logs
 logs/
+
+# pip/setuptools egg
+*.egg-info/

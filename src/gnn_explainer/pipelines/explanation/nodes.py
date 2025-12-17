@@ -29,6 +29,8 @@ class ModelWrapper(nn.Module):
         self.edge_index = edge_index
         self.edge_type = edge_type
         self.mode = mode
+        # Store current subgraph node mapping (set before each explanation)
+        self.current_subset = None
 
     def forward(self, x, edge_index, **kwargs):
         """
@@ -39,7 +41,8 @@ class ModelWrapper(nn.Module):
 
         Args:
             x: Node features (not used for KG models, but required by Explainer)
-            edge_index: Edge index of the subgraph (shape: [2, num_edges])
+            edge_index: Edge index of the subgraph with RELABELED indices (shape: [2, num_edges])
+                       Indices range from 0 to len(subset)-1
 
         Returns:
             Scores for the given edges
@@ -52,9 +55,20 @@ class ModelWrapper(nn.Module):
             # Get node and relation embeddings using FULL GRAPH
             node_emb, rel_emb = self.kg_model.encode(self.edge_index, self.edge_type)
 
-            # Score the edges in the SUBGRAPH
-            head_idx = edge_index[0]
-            tail_idx = edge_index[1]
+            # The edge_index passed here contains RELABELED indices (0 to len(subset)-1)
+            # We need to map them back to GLOBAL indices to access node_emb correctly
+            head_idx_subgraph = edge_index[0]
+            tail_idx_subgraph = edge_index[1]
+
+            if self.current_subset is not None:
+                # Map subgraph indices to global indices
+                head_idx_global = self.current_subset[head_idx_subgraph]
+                tail_idx_global = self.current_subset[tail_idx_subgraph]
+            else:
+                # Fallback: assume indices are already global
+                # This shouldn't happen if setup correctly
+                head_idx_global = head_idx_subgraph
+                tail_idx_global = tail_idx_subgraph
 
             # Get edge types for the subgraph
             edge_type_for_query = kwargs.get('edge_type', None)
@@ -62,8 +76,8 @@ class ModelWrapper(nn.Module):
                 # Fallback: assume relation 0
                 edge_type_for_query = torch.zeros(edge_index.size(1), dtype=torch.long, device=edge_index.device)
 
-            # Decode using full graph embeddings but subgraph edges
-            scores = self.kg_model.decode(node_emb, rel_emb, head_idx, tail_idx, edge_type_for_query)
+            # Decode using full graph embeddings with global indices
+            scores = self.kg_model.decode(node_emb, rel_emb, head_idx_global, tail_idx_global, edge_type_for_query)
 
             return scores
         else:
@@ -739,6 +753,10 @@ def run_gnnexplainer(
             print(f"{len(subset)} nodes, {sub_edge_index.size(1)} edges", end='', flush=True)
             print(f"\n      Optimizing edge mask for {epochs} epochs...", end='', flush=True)
 
+            # CRITICAL: Set the node subset mapping in the wrapped model
+            # This allows the model to map relabeled subgraph indices back to global indices
+            wrapped_model.current_subset = subset
+
             explanation = explainer(
                 x=sub_x,
                 edge_index=sub_edge_index,
@@ -970,6 +988,10 @@ def run_pgexplainer(
 
             print(f"{len(subset)} nodes, {sub_edge_index.size(1)} edges", end='', flush=True)
             print(f"\n      Generating explanation...", end='', flush=True)
+
+            # CRITICAL: Set the node subset mapping in the wrapped model
+            # This allows the model to map relabeled subgraph indices back to global indices
+            wrapped_model.current_subset = subset
 
             explanation = explainer(
                 x=sub_x,

@@ -48,36 +48,49 @@ class ModelWrapper(nn.Module):
             Scores for the given edges
         """
         if self.mode == 'link_prediction':
-            # CRITICAL: CompGCN needs the FULL GRAPH for message passing
-            # We encode on the full graph, then extract embeddings for subgraph nodes
-            # This is because each node's embedding depends on its full neighborhood
+            # GNNExplainer requires the model to work with the SUBGRAPH edges only
+            # The edge_index passed here is the subgraph with relabeled indices (0 to len(subset)-1)
+            #
+            # However, CompGCN message passing needs the actual node indices to look up embeddings
+            # So we need to:
+            # 1. Encode on the subgraph edges (for GNNExplainer's edge masking to work)
+            # 2. But use global node IDs so CompGCN can access the right embeddings
 
-            # Get node and relation embeddings using FULL GRAPH
-            node_emb, rel_emb = self.kg_model.encode(self.edge_index, self.edge_type)
+            # Map the relabeled edge_index back to global indices for encoding
+            if self.current_subset is not None:
+                # Convert subgraph edge indices to global indices
+                edge_index_global = torch.stack([
+                    self.current_subset[edge_index[0]],
+                    self.current_subset[edge_index[1]]
+                ])
+            else:
+                # Fallback: assume indices are already global
+                edge_index_global = edge_index
 
-            # The edge_index passed here contains RELABELED indices (0 to len(subset)-1)
-            # We need to map them back to GLOBAL indices to access node_emb correctly
+            # Get edge types for the subgraph
+            edge_type_for_encoding = kwargs.get('edge_type', None)
+            if edge_type_for_encoding is None:
+                # Fallback: assume relation 0
+                edge_type_for_encoding = torch.zeros(edge_index.size(1), dtype=torch.long, device=edge_index.device)
+
+            # Encode using SUBGRAPH edges with global node indices
+            # This allows GNNExplainer to apply edge masks during message passing
+            node_emb, rel_emb = self.kg_model.encode(edge_index_global, edge_type_for_encoding)
+
+            # For decoding, we use the subgraph edges
             head_idx_subgraph = edge_index[0]
             tail_idx_subgraph = edge_index[1]
 
+            # Map to global indices for accessing embeddings
             if self.current_subset is not None:
-                # Map subgraph indices to global indices
                 head_idx_global = self.current_subset[head_idx_subgraph]
                 tail_idx_global = self.current_subset[tail_idx_subgraph]
             else:
-                # Fallback: assume indices are already global
-                # This shouldn't happen if setup correctly
                 head_idx_global = head_idx_subgraph
                 tail_idx_global = tail_idx_subgraph
 
-            # Get edge types for the subgraph
-            edge_type_for_query = kwargs.get('edge_type', None)
-            if edge_type_for_query is None:
-                # Fallback: assume relation 0
-                edge_type_for_query = torch.zeros(edge_index.size(1), dtype=torch.long, device=edge_index.device)
-
-            # Decode using full graph embeddings with global indices
-            scores = self.kg_model.decode(node_emb, rel_emb, head_idx_global, tail_idx_global, edge_type_for_query)
+            # Decode using embeddings with global indices
+            scores = self.kg_model.decode(node_emb, rel_emb, head_idx_global, tail_idx_global, edge_type_for_encoding)
 
             return scores
         else:
@@ -757,7 +770,22 @@ def run_gnnexplainer(
                 raise ValueError(f"sub_edge_index contains indices >= len(subset) ({sub_edge_index.max().item()} >= {len(subset)})")
 
             print(f"{len(subset)} nodes, {sub_edge_index.size(1)} edges", end='', flush=True)
-            print(f"\n      Optimizing edge mask for {epochs} epochs...", end='', flush=True)
+
+            # Diagnostic checks before explainer call
+            print(f"\n      Diagnostic checks:")
+            print(f"        - subset shape: {subset.shape}, min: {subset.min().item()}, max: {subset.max().item()}")
+            print(f"        - sub_edge_index shape: {sub_edge_index.shape}, min: {sub_edge_index.min().item()}, max: {sub_edge_index.max().item()}")
+            print(f"        - sub_edge_type shape: {sub_edge_type.shape}, min: {sub_edge_type.min().item()}, max: {sub_edge_type.max().item()}")
+            print(f"        - sub_x shape: {sub_x.shape}")
+            print(f"        - head_node_remapped: {head_node_remapped}")
+            print(f"        - Expected: sub_edge_index.max() < len(subset) = {len(subset)}")
+            print(f"        - Expected: sub_edge_type.max() < num_relations = {model_dict['num_relations']}")
+
+            # Check if subset indices will be valid when accessing full graph embeddings
+            print(f"        - Will access node_emb[{subset.min().item()}:{subset.max().item()}] from full graph embeddings")
+            print(f"        - Full graph has {num_nodes} nodes")
+
+            print(f"      Optimizing edge mask for {epochs} epochs...", end='', flush=True)
 
             # CRITICAL: Set the node subset mapping in the wrapped model
             # This allows the model to map relabeled subgraph indices back to global indices

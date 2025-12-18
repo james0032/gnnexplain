@@ -977,38 +977,33 @@ def run_pgexplainer(
     print(f"  This learns a parameterized explainer that works for all instances")
 
     # For PGExplainer, we need to provide training data
-    # We'll use a subset of edges from the graph
+    # Sample edges from the graph to get connected node pairs
     training_edges = pg_params.get('training_edges', 100)
     num_edges = edge_index.size(1)
-    train_indices = torch.randperm(num_edges)[:min(training_edges, num_edges)]
+    train_edge_indices = torch.randperm(num_edges, device=device)[:min(training_edges, num_edges)]
 
-    # Sample random nodes for training
-    # For node-level task, we need to sample nodes and their neighborhoods
-    num_train_nodes = min(training_edges, num_nodes)
-    train_node_indices = torch.randperm(num_nodes, device=device)[:num_train_nodes]
+    # Get the actual node pairs from sampled edges (guarantees connectivity)
+    train_node_pairs = edge_index[:, train_edge_indices]  # [2, num_train_edges]
 
-    print(f"  Training on {len(train_node_indices)} random node pairs using '{subgraph_method}' subgraph extraction...")
-
-    # Create targets (all 1.0 for existing edges/nodes)
-    train_targets = torch.ones(len(train_node_indices), device=device)
+    print(f"  Training on {train_node_pairs.size(1)} random edge pairs (connected nodes) using '{subgraph_method}' subgraph extraction...")
 
     # Train the explainer
     for epoch in range(epochs):
-        # Train on random subset of nodes
-        for idx in train_node_indices:
+        # Train on sampled edges (connected node pairs)
+        for i in range(train_node_pairs.size(1)):
             try:
+                head_idx = train_node_pairs[0, i].item()
+                tail_idx = train_node_pairs[1, i].item()
+
                 # Use the same subgraph extraction method as configured
                 if subgraph_method == 'paths':
                     # Use path-based subgraph extraction (igraph)
                     max_path_length = pg_params.get('max_path_length', 3)
 
-                    # For training, we need pairs of nodes to extract paths between them
-                    # Sample a random target node
-                    target_idx = torch.randint(0, num_nodes, (1,), device=device).item()
-
-                    # Extract path-based subgraph between idx and target_idx
+                    # Extract path-based subgraph between head and tail
+                    # These are guaranteed to be connected since they're from an edge
                     subset, sub_edge_index, mapping, edge_mask = extract_path_based_subgraph(
-                        idx.item(), target_idx, edge_index, edge_type, max_path_length, device
+                        head_idx, tail_idx, edge_index, edge_type, max_path_length, device
                     )
                 else:
                     # Use PyG k-hop subgraph extraction (default)
@@ -1016,7 +1011,7 @@ def run_pgexplainer(
                     khop_distance = pg_params.get('khop_distance', 2)
 
                     subset, sub_edge_index, mapping, edge_mask = k_hop_subgraph(
-                        node_idx=idx.item(),
+                        node_idx=[head_idx, tail_idx],  # Use both nodes from the edge
                         num_hops=khop_distance,
                         edge_index=edge_index,
                         relabel_nodes=True,
@@ -1028,6 +1023,12 @@ def run_pgexplainer(
 
                 sub_edge_type = edge_type[edge_mask]
                 sub_x = x[subset]
+
+                # Ensure all tensors are on the correct device
+                subset = subset.to(device)
+                sub_edge_index = sub_edge_index.to(device)
+                sub_edge_type = sub_edge_type.to(device)
+                sub_x = sub_x.to(device)
 
                 # Set subset for model
                 wrapped_model.current_subset = subset
@@ -1045,7 +1046,12 @@ def run_pgexplainer(
                 )
 
             except Exception as e:
-                # Skip problematic training examples
+                # Skip problematic training examples, but log for debugging
+                if "CUDA" in str(e):
+                    print(f"\n      Warning: CUDA error during training on edge ({head_idx}, {tail_idx}): {e}")
+                    # Try to clear CUDA cache
+                    if device.type == 'cuda':
+                        torch.cuda.empty_cache()
                 continue
 
         if (epoch + 1) % 10 == 0:

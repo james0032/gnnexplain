@@ -984,8 +984,8 @@ def run_pgexplainer(
 
     # Extract a subgraph using the configured method with reasonable size limits
     if subgraph_method == 'paths':
-        # Use shorter path length for training to keep subgraph manageable
-        max_path_length = min(pg_params.get('max_path_length', 3), 2)  # Cap at 2 for training
+        # Use configured path length for training
+        max_path_length = pg_params.get('max_path_length', 3)
         print(f"[PG] Using path-based extraction (max_path_length={max_path_length})...", flush=True)
         subset, sub_edge_index, mapping, edge_mask = extract_path_based_subgraph(
             center_head, center_tail, edge_index, edge_type, max_path_length, device

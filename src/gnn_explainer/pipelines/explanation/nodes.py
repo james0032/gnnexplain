@@ -1154,23 +1154,23 @@ def run_pgexplainer(
                         edge_type=training_edge_type
                     )
 
-                if epoch == 0 and i < 3:
-                    print(f"[PG-TRAIN]   ✓ Training step complete", flush=True)
+                    if epoch == 0 and i < 3:
+                        print(f"[PG-TRAIN]   ✓ Training step complete", flush=True)
 
-                epoch_successful += 1
-                successful_batches += 1
+                    epoch_successful += 1
+                    successful_batches += 1
 
-            except Exception as e:
-                epoch_failed += 1
-                failed_batches += 1
-                # Skip problematic training examples, but log for debugging
-                if epoch == 0 and (i < 3 or (i + 1) % 10 == 0):
-                    print(f"[PG-TRAIN]   ✗ Error on batch {i+1}: {type(e).__name__}: {e}", flush=True)
-                if "CUDA" in str(e):
-                    # Try to clear CUDA cache
-                    if device.type == 'cuda':
-                        torch.cuda.empty_cache()
-                continue
+                except Exception as e:
+                    epoch_failed += 1
+                    failed_batches += 1
+                    # Skip problematic training examples, but log for debugging
+                    if epoch == 0 and (i < 3 or (i + 1) % 10 == 0):
+                        print(f"[PG-TRAIN]   ✗ Error on batch {i+1}: {type(e).__name__}: {e}", flush=True)
+                    if "CUDA" in str(e):
+                        # Try to clear CUDA cache
+                        if device.type == 'cuda':
+                            torch.cuda.empty_cache()
+                    continue
 
             # Print epoch progress
             epoch_time = time.time() - epoch_start

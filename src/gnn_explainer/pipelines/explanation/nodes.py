@@ -907,39 +907,44 @@ def run_pgexplainer(
     Returns:
         Dictionary with explanations
     """
-    print("\n" + "="*60)
-    print("RUNNING PGExplainer")
-    print("="*60)
+    print("\n" + "="*60, flush=True)
+    print("RUNNING PGExplainer", flush=True)
+    print("="*60, flush=True)
 
     import traceback as tb_module  # Import at top of function
+    import sys
 
+    print("[PG] Step 1/6: Loading model and graph data...", flush=True)
     device = model_dict['device']
     wrapped_model = model_dict['wrapped_model']
     edge_index = model_dict['edge_index']
     edge_type = model_dict['edge_type']
     num_nodes = model_dict['num_nodes']
+    print(f"[PG] ✓ Loaded: {num_nodes} nodes, {edge_index.size(1)} edges", flush=True)
 
     # Extract PGExplainer-specific configuration
+    print("[PG] Step 2/6: Reading configuration...", flush=True)
     pg_params = explainer_params.get('pgexplainer', {})
     epochs = pg_params.get('pg_epochs', 30)
     lr = pg_params.get('pg_lr', 0.003)
     subgraph_method = pg_params.get('subgraph_method', 'khop')
 
-    print(f"\nPGExplainer configuration:")
-    print(f"  Training epochs: {epochs}")
-    print(f"  Learning rate: {lr}")
-    print(f"  Subgraph method: {subgraph_method}")
+    print(f"\n[PG] PGExplainer configuration:", flush=True)
+    print(f"  Training epochs: {epochs}", flush=True)
+    print(f"  Learning rate: {lr}", flush=True)
+    print(f"  Subgraph method: {subgraph_method}", flush=True)
     if subgraph_method == 'paths':
-        print(f"  Max path length: {pg_params.get('max_path_length', 3)}")
+        print(f"  Max path length: {pg_params.get('max_path_length', 3)}", flush=True)
     else:
-        print(f"  K-hop distance: {pg_params.get('khop_distance', 2)}")
-    print(f"\nNote: PGExplainer trains an explainer network once,")
-    print(f"      then generates explanations efficiently for all instances.")
+        print(f"  K-hop distance: {pg_params.get('khop_distance', 2)}", flush=True)
+    print(f"\n[PG] Note: PGExplainer trains an explainer network once,", flush=True)
+    print(f"      then generates explanations efficiently for all instances.", flush=True)
 
     # Create explainer
     # Note: PGExplainer does NOT support task_level='edge', so we use 'node'
     # and explain link prediction as a node-level task on the head node
     # Using 'phenomenon' type to explain why specific links are predicted to exist
+    print("[PG] Step 3/6: Initializing PGExplainer...", flush=True)
     explainer = Explainer(
         model=wrapped_model,
         algorithm=PGExplainer(epochs=epochs, lr=lr),
@@ -952,20 +957,22 @@ def run_pgexplainer(
         ),
     )
 
-    print(f"\n✓ PGExplainer initialized")
+    print(f"[PG] ✓ PGExplainer initialized", flush=True)
 
     # Create dummy node features (required by Explainer API but not used by KG models)
     # Since our KG model uses learned embeddings and doesn't use input features,
     # we create a minimal tensor instead of a massive identity matrix
-    print(f"\nNote: Using minimal node features (KG model uses learned embeddings)")
+    print(f"[PG] Creating minimal node features tensor...", flush=True)
     x = torch.zeros((num_nodes, 1), device=device)  # Minimal features instead of identity matrix
+    print(f"[PG] ✓ Created feature tensor: {x.shape}", flush=True)
 
     # Train PGExplainer on the full graph first
-    print(f"\nTraining PGExplainer network...")
-    print(f"  This learns a parameterized explainer that works for all instances")
+    print(f"\n[PG] Step 4/6: Training PGExplainer network...", flush=True)
+    print(f"[PG] This learns a parameterized explainer that works for all instances", flush=True)
 
     # For PGExplainer, we need to provide training data
     # Sample edges from the graph to get connected node pairs
+    print(f"[PG] Sampling training edges...", flush=True)
     training_edges = pg_params.get('training_edges', 100)
     num_edges = edge_index.size(1)
     train_edge_indices = torch.randperm(num_edges, device=device)[:min(training_edges, num_edges)]
@@ -973,7 +980,8 @@ def run_pgexplainer(
     # Get the actual node pairs from sampled edges (guarantees connectivity)
     train_node_pairs = edge_index[:, train_edge_indices]  # [2, num_train_edges]
 
-    print(f"  Training on {train_node_pairs.size(1)} random edge pairs (connected nodes) using '{subgraph_method}' subgraph extraction...")
+    print(f"[PG] ✓ Sampled {train_node_pairs.size(1)} edge pairs for training", flush=True)
+    print(f"[PG] Training using '{subgraph_method}' subgraph extraction...", flush=True)
 
     # Train the explainer
     import time
@@ -988,11 +996,22 @@ def run_pgexplainer(
         epoch_successful = 0
         epoch_failed = 0
 
+        if epoch == 0:
+            print(f"[PG-TRAIN] Starting epoch {epoch+1}/{epochs}...", flush=True)
+
         # Train on sampled edges (connected node pairs)
         for i in range(train_node_pairs.size(1)):
             try:
+                # Detailed logging for first few batches
+                if epoch == 0 and i < 3:
+                    print(f"[PG-TRAIN] Processing batch {i+1}/{train_node_pairs.size(1)}...", flush=True)
+
                 head_idx = train_node_pairs[0, i].item()
                 tail_idx = train_node_pairs[1, i].item()
+
+                if epoch == 0 and i < 3:
+                    print(f"[PG-TRAIN]   Edge: ({head_idx}, {tail_idx})", flush=True)
+                    print(f"[PG-TRAIN]   Extracting subgraph using '{subgraph_method}' method...", flush=True)
 
                 # Use the same subgraph extraction method as configured
                 if subgraph_method == 'paths':
@@ -1018,10 +1037,18 @@ def run_pgexplainer(
                     )
 
                 if len(subset) < 2:  # Skip if subgraph too small
+                    if epoch == 0 and i < 3:
+                        print(f"[PG-TRAIN]   ⚠ Subgraph too small, skipping", flush=True)
                     continue
+
+                if epoch == 0 and i < 3:
+                    print(f"[PG-TRAIN]   ✓ Subgraph: {len(subset)} nodes, {sub_edge_index.size(1)} edges", flush=True)
 
                 sub_edge_type = edge_type[edge_mask]
                 sub_x = x[subset]
+
+                if epoch == 0 and i < 3:
+                    print(f"[PG-TRAIN]   Moving tensors to device...", flush=True)
 
                 # Ensure all tensors are on the correct device
                 subset = subset.to(device)
@@ -1037,6 +1064,9 @@ def run_pgexplainer(
                     total_subgraph_nodes += len(subset)
                     total_subgraph_edges += sub_edge_index.size(1)
 
+                if epoch == 0 and i < 3:
+                    print(f"[PG-TRAIN]   Calling explainer.algorithm.train()...", flush=True)
+
                 # Train step
                 target = torch.tensor([1.0], device=device)
                 explainer.algorithm.train(
@@ -1048,6 +1078,9 @@ def run_pgexplainer(
                     index=mapping[0].item() if mapping.numel() >= 1 else 0,
                     edge_type=sub_edge_type
                 )
+
+                if epoch == 0 and i < 3:
+                    print(f"[PG-TRAIN]   ✓ Training step complete", flush=True)
 
                 epoch_successful += 1
                 successful_batches += 1
@@ -1066,34 +1099,37 @@ def run_pgexplainer(
         # Print epoch progress
         epoch_time = time.time() - epoch_start
         if (epoch + 1) % 5 == 0 or epoch == 0:
-            print(f"    Epoch {epoch+1}/{epochs}: {epoch_successful} successful, {epoch_failed} failed ({epoch_time:.1f}s)")
+            print(f"[PG-TRAIN] Epoch {epoch+1}/{epochs}: {epoch_successful} successful, {epoch_failed} failed ({epoch_time:.1f}s)", flush=True)
 
     # Training summary
     train_time = time.time() - train_start
     success_rate = (successful_batches / (successful_batches + failed_batches) * 100) if (successful_batches + failed_batches) > 0 else 0
     avg_subgraph_nodes = total_subgraph_nodes / successful_batches if successful_batches > 0 else 0
     avg_subgraph_edges = total_subgraph_edges / successful_batches if successful_batches > 0 else 0
-    print(f"\n✓ PGExplainer network trained ({epochs} epochs, {train_time:.1f}s)")
-    print(f"  Training summary: {successful_batches} successful, {failed_batches} failed ({success_rate:.1f}% success rate)")
-    print(f"  Average subgraph size: {avg_subgraph_nodes:.1f} nodes, {avg_subgraph_edges:.1f} edges")
+    print(f"\n[PG] ✓ PGExplainer network trained ({epochs} epochs, {train_time:.1f}s)", flush=True)
+    print(f"[PG]   Training summary: {successful_batches} successful, {failed_batches} failed ({success_rate:.1f}% success rate)", flush=True)
+    print(f"[PG]   Average subgraph size: {avg_subgraph_nodes:.1f} nodes, {avg_subgraph_edges:.1f} edges", flush=True)
 
     # Generate explanations for selected triples
+    print(f"\n[PG] Step 5/6: Generating explanations for selected triples...", flush=True)
     explanations = []
 
     selected_edge_index = selected_triples['selected_edge_index'].to(device)
     selected_edge_type = selected_triples['selected_edge_type'].to(device)
     triples_readable = selected_triples['triples_readable']
 
-    print(f"\nGenerating explanations for {len(triples_readable)} triples...")
-    print(f"Configuration: Pre-trained explainer network (no per-triple optimization)")
+    print(f"[PG] Generating explanations for {len(triples_readable)} triples...", flush=True)
+    print(f"[PG] Configuration: Pre-trained explainer network (no per-triple optimization)", flush=True)
 
     import time
     start_time = time.time()
 
     for i in range(len(triples_readable)):
         triple_start = time.time()
-        print(f"\n  [{i+1}/{len(triples_readable)}] Explaining: {triples_readable[i]['triple']}")
-        print(f"      Extracting 2-hop subgraph...", end='', flush=True)
+        if i == 0 or (i + 1) % 5 == 0 or i == len(triples_readable) - 1:
+            print(f"\n[PG-EXPLAIN] [{i+1}/{len(triples_readable)}] Explaining: {triples_readable[i]['triple']}", flush=True)
+        if i < 3:
+            print(f"[PG-EXPLAIN]   Extracting subgraph...", flush=True)
 
         edge_to_explain = selected_edge_index[:, i:i+1]
         edge_type_to_explain = selected_edge_type[i:i+1]
@@ -1151,8 +1187,9 @@ def run_pgexplainer(
             if sub_edge_index.max().item() >= len(subset):
                 raise ValueError(f"sub_edge_index contains indices >= len(subset) ({sub_edge_index.max().item()} >= {len(subset)})")
 
-            print(f"{len(subset)} nodes, {sub_edge_index.size(1)} edges", end='', flush=True)
-            print(f"\n      Generating explanation...", end='', flush=True)
+            if i < 3:
+                print(f"[PG-EXPLAIN]   ✓ Subgraph: {len(subset)} nodes, {sub_edge_index.size(1)} edges", flush=True)
+                print(f"[PG-EXPLAIN]   Setting model subset and generating explanation...", flush=True)
 
             # CRITICAL: Set the node subset mapping in the wrapped model
             # This allows the model to map relabeled subgraph indices back to global indices
@@ -1172,7 +1209,8 @@ def run_pgexplainer(
             )
 
             triple_time = time.time() - triple_start
-            print(f" Done in {triple_time:.1f}s")
+            if i < 3:
+                print(f"[PG-EXPLAIN]   ✓ Explanation generated in {triple_time:.1f}s", flush=True)
 
             # Extract explanation components
             edge_mask = explanation.edge_mask if hasattr(explanation, 'edge_mask') else None
@@ -1223,16 +1261,17 @@ def run_pgexplainer(
             })
 
         # Show progress estimate
-        if i < len(triples_readable) - 1:
+        if (i + 1) % 5 == 0 and i < len(triples_readable) - 1:
             avg_time = (time.time() - start_time) / (i + 1)
             remaining = len(triples_readable) - (i + 1)
             eta_seconds = avg_time * remaining
             eta_mins = int(eta_seconds / 60)
             eta_secs = int(eta_seconds % 60)
-            print(f"      Progress: {i+1}/{len(triples_readable)} done, ETA: {eta_mins}m {eta_secs}s", flush=True)
+            print(f"[PG-EXPLAIN] Progress: {i+1}/{len(triples_readable)} done, ETA: {eta_mins}m {eta_secs}s", flush=True)
 
     total_time = time.time() - start_time
-    print(f"\n✓ PGExplainer completed: {len(explanations)} explanations generated in {total_time:.1f}s")
+    print(f"\n[PG] Step 6/6: Finalizing results...", flush=True)
+    print(f"[PG] ✓ PGExplainer completed: {len(explanations)} explanations generated in {total_time:.1f}s", flush=True)
 
     return {
         'explainer_type': 'PGExplainer',

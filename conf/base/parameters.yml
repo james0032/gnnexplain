@@ -87,9 +87,11 @@ explanation:
     pg_lr: 0.003                          # Learning rate for explainer network
     training_edges: 100                   # Number of edges to train explainer on
     top_k_edges: 10                       # Number of top important edges to extract
-    subgraph_method: "paths"               # Options: "khop" (PyG k-hop), "paths" (igraph paths)
+    subgraph_method: "paths"              # Options: "khop" (PyG k-hop), "paths" (igraph paths)
     khop_distance: 2                      # For khop method: number of hops
     max_path_length: 3                    # For paths method: maximum path length
+    use_full_graph_training: false        # Use full graph for training (slower but comprehensive)
+    force_retrain: false                  # Force retraining even if cached explainer exists
 
   # PAGE parameters (Improved Parametric Generative Explainer)
   # Uses CompGCN embeddings + Prediction-aware training

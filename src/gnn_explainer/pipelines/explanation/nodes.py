@@ -966,109 +966,162 @@ def run_pgexplainer(
     x = torch.zeros((num_nodes, 1), device=device)  # Minimal features instead of identity matrix
     print(f"[PG] ✓ Created feature tensor: {x.shape}", flush=True)
 
-    # Train PGExplainer on the full graph first
-    print(f"\n[PG] Step 4/6: Training PGExplainer network...", flush=True)
-    print(f"[PG] This learns a parameterized explainer that works for all instances", flush=True)
+    # Check if trained PGExplainer already exists
+    import os
+    from pathlib import Path
 
-    # OPTIMIZED APPROACH: Extract ONE representative subgraph, then train on edges within it
-    # This is much faster than extracting a subgraph for each training edge
-    print(f"[PG] Extracting representative training subgraph...", flush=True)
+    explainer_cache_dir = Path("data/06_explainer_cache")
+    explainer_cache_dir.mkdir(parents=True, exist_ok=True)
+    explainer_cache_path = explainer_cache_dir / "pgexplainer_trained.pt"
 
-    # Select a random edge to center the training subgraph around
-    num_edges = edge_index.size(1)
-    center_edge_idx = torch.randint(0, num_edges, (1,), device=device).item()
-    center_head = edge_index[0, center_edge_idx].item()
-    center_tail = edge_index[1, center_edge_idx].item()
+    use_full_graph_training = pg_params.get('use_full_graph_training', False)
+    force_retrain = pg_params.get('force_retrain', False)
 
-    print(f"[PG] Center edge: ({center_head}, {center_tail})", flush=True)
+    print(f"\n[PG] Step 4/6: Training/Loading PGExplainer network...", flush=True)
 
-    # Extract a subgraph using the configured method with reasonable size limits
-    if subgraph_method == 'paths':
-        # Use configured path length for training
-        max_path_length = pg_params.get('max_path_length', 3)
-        print(f"[PG] Using path-based extraction (max_path_length={max_path_length})...", flush=True)
-        subset, sub_edge_index, mapping, edge_mask = extract_path_based_subgraph(
-            center_head, center_tail, edge_index, edge_type, max_path_length, device
-        )
+    if explainer_cache_path.exists() and not force_retrain:
+        print(f"[PG] Found cached trained explainer at {explainer_cache_path}", flush=True)
+        print(f"[PG] Loading trained PGExplainer network...", flush=True)
+        try:
+            checkpoint = torch.load(explainer_cache_path, map_location=device)
+            explainer.algorithm.load_state_dict(checkpoint['explainer_state_dict'])
+            print(f"[PG] ✓ Loaded trained explainer (trained for {checkpoint['epochs']} epochs)", flush=True)
+            print(f"[PG]   Training config: {checkpoint['training_config']}", flush=True)
+        except Exception as e:
+            print(f"[PG] ⚠ Failed to load cached explainer: {e}", flush=True)
+            print(f"[PG] Will retrain from scratch...", flush=True)
+            force_retrain = True
     else:
-        # Use k-hop subgraph extraction
-        khop_distance = pg_params.get('khop_distance', 2)
-        print(f"[PG] Using k-hop extraction (khop={khop_distance})...", flush=True)
-        from torch_geometric.utils import k_hop_subgraph
-        subset, sub_edge_index, mapping, edge_mask = k_hop_subgraph(
-            node_idx=[center_head, center_tail],
-            num_hops=khop_distance,
-            edge_index=edge_index,
-            relabel_nodes=True,
-            num_nodes=num_nodes
-        )
+        if force_retrain:
+            print(f"[PG] Force retrain enabled, training from scratch...", flush=True)
+        else:
+            print(f"[PG] No cached explainer found, training from scratch...", flush=True)
+        force_retrain = True
 
-    # Extract subgraph data
-    sub_edge_type = edge_type[edge_mask]
-    sub_x = x[subset]
+    if force_retrain or not explainer_cache_path.exists():
+        print(f"[PG] This learns a parameterized explainer that works for all instances", flush=True)
 
-    # Ensure all tensors are on the correct device
-    subset = subset.to(device)
-    sub_edge_index = sub_edge_index.to(device)
-    sub_edge_type = sub_edge_type.to(device)
-    sub_x = sub_x.to(device)
+        # Determine training data (full graph or subgraph)
+        if use_full_graph_training:
+            # Use full graph for training (slower but more comprehensive)
+            print(f"[PG] Using FULL GRAPH for training (may be slow)...", flush=True)
+            training_edge_index = edge_index
+            training_edge_type = edge_type
+            training_x = x
+            training_subset = None  # No subset mapping needed
+            training_subgraph_info = "full_graph"
 
-    print(f"[PG] ✓ Training subgraph: {len(subset)} nodes, {sub_edge_index.size(1)} edges", flush=True)
+            # Sample edges from full graph
+            num_edges = edge_index.size(1)
+            training_edges = pg_params.get('training_edges', 100)
+            train_edge_indices = torch.randperm(num_edges, device=device)[:min(training_edges, num_edges)]
+            train_node_pairs = edge_index[:, train_edge_indices]
 
-    # Now sample edges FROM WITHIN this subgraph for training
-    training_edges = pg_params.get('training_edges', 100)
-    num_subgraph_edges = sub_edge_index.size(1)
-    actual_training_edges = min(training_edges, num_subgraph_edges)
+            print(f"[PG] ✓ Sampled {train_node_pairs.size(1)} edges from full graph", flush=True)
+        else:
+            # OPTIMIZED APPROACH: Extract ONE representative subgraph, then train on edges within it
+            print(f"[PG] Using SUBGRAPH-BASED training (faster)...", flush=True)
+            print(f"[PG] Extracting representative training subgraph...", flush=True)
 
-    train_edge_indices = torch.randperm(num_subgraph_edges, device=device)[:actual_training_edges]
-    train_node_pairs = sub_edge_index[:, train_edge_indices]  # [2, num_train_edges] - already relabeled
-    train_edge_types = sub_edge_type[train_edge_indices]
+            # Select a random edge to center the training subgraph around
+            num_edges = edge_index.size(1)
+            center_edge_idx = torch.randint(0, num_edges, (1,), device=device).item()
+            center_head = edge_index[0, center_edge_idx].item()
+            center_tail = edge_index[1, center_edge_idx].item()
 
-    print(f"[PG] ✓ Sampled {train_node_pairs.size(1)} edges from training subgraph", flush=True)
+            print(f"[PG] Center edge: ({center_head}, {center_tail})", flush=True)
 
-    # Train the explainer
-    import time
-    train_start = time.time()
-    successful_batches = 0
-    failed_batches = 0
-
-    # Set the subgraph context for the model (used throughout training)
-    wrapped_model.current_subset = subset
-
-    for epoch in range(epochs):
-        epoch_start = time.time()
-        epoch_successful = 0
-        epoch_failed = 0
-
-        if epoch == 0:
-            print(f"[PG-TRAIN] Starting epoch {epoch+1}/{epochs}...", flush=True)
-
-        # Train on sampled edges within the subgraph
-        for i in range(train_node_pairs.size(1)):
-            try:
-                # Detailed logging for first 3 batches, then every 10th batch
-                if epoch == 0 and (i < 3 or (i + 1) % 10 == 0):
-                    print(f"[PG-TRAIN] Processing batch {i+1}/{train_node_pairs.size(1)}...", flush=True)
-                    if i < 3:
-                        head_idx = train_node_pairs[0, i].item()
-                        tail_idx = train_node_pairs[1, i].item()
-                        print(f"[PG-TRAIN]   Edge (relabeled): ({head_idx}, {tail_idx})", flush=True)
-                        print(f"[PG-TRAIN]   Calling explainer.algorithm.train()...", flush=True)
-
-                # Get the head node index for this edge (already relabeled within subgraph)
-                head_node_idx = train_node_pairs[0, i].item()
-
-                # Train step - using the SAME subgraph for all training edges
-                target = torch.tensor([1.0], device=device)
-                explainer.algorithm.train(
-                    epoch=epoch,
-                    model=wrapped_model,
-                    x=sub_x,  # Same subgraph features
-                    edge_index=sub_edge_index,  # Same subgraph structure
-                    target=target,
-                    index=head_node_idx,  # Different focus node for each edge
-                    edge_type=sub_edge_type  # Same subgraph edge types
+            # Extract a subgraph using the configured method
+            if subgraph_method == 'paths':
+                max_path_length = pg_params.get('max_path_length', 3)
+                print(f"[PG] Using path-based extraction (max_path_length={max_path_length})...", flush=True)
+                subset, sub_edge_index, mapping, edge_mask = extract_path_based_subgraph(
+                    center_head, center_tail, edge_index, edge_type, max_path_length, device
                 )
+            else:
+                khop_distance = pg_params.get('khop_distance', 2)
+                print(f"[PG] Using k-hop extraction (khop={khop_distance})...", flush=True)
+                from torch_geometric.utils import k_hop_subgraph
+                subset, sub_edge_index, mapping, edge_mask = k_hop_subgraph(
+                    node_idx=[center_head, center_tail],
+                    num_hops=khop_distance,
+                    edge_index=edge_index,
+                    relabel_nodes=True,
+                    num_nodes=num_nodes
+                )
+
+            # Extract subgraph data
+            sub_edge_type = edge_type[edge_mask]
+            sub_x = x[subset]
+
+            # Ensure all tensors are on the correct device
+            subset = subset.to(device)
+            sub_edge_index = sub_edge_index.to(device)
+            sub_edge_type = sub_edge_type.to(device)
+            sub_x = sub_x.to(device)
+
+            print(f"[PG] ✓ Training subgraph: {len(subset)} nodes, {sub_edge_index.size(1)} edges", flush=True)
+
+            # Set training data to subgraph
+            training_edge_index = sub_edge_index
+            training_edge_type = sub_edge_type
+            training_x = sub_x
+            training_subset = subset
+            training_subgraph_info = f"subgraph_{len(subset)}_nodes_{sub_edge_index.size(1)}_edges"
+
+            # Now sample edges FROM WITHIN this subgraph for training
+            training_edges = pg_params.get('training_edges', 100)
+            num_subgraph_edges = sub_edge_index.size(1)
+            actual_training_edges = min(training_edges, num_subgraph_edges)
+
+            train_edge_indices = torch.randperm(num_subgraph_edges, device=device)[:actual_training_edges]
+            train_node_pairs = training_edge_index[:, train_edge_indices]
+
+            print(f"[PG] ✓ Sampled {train_node_pairs.size(1)} edges from training subgraph", flush=True)
+
+        # Train the explainer
+        import time
+        train_start = time.time()
+        successful_batches = 0
+        failed_batches = 0
+
+        # Set the subgraph/full graph context for the model
+        wrapped_model.current_subset = training_subset
+
+        for epoch in range(epochs):
+            epoch_start = time.time()
+            epoch_successful = 0
+            epoch_failed = 0
+
+            if epoch == 0:
+                print(f"[PG-TRAIN] Starting epoch {epoch+1}/{epochs}...", flush=True)
+
+            # Train on sampled edges
+            for i in range(train_node_pairs.size(1)):
+                try:
+                    # Detailed logging for first 3 batches, then every 10th batch
+                    if epoch == 0 and (i < 3 or (i + 1) % 10 == 0):
+                        print(f"[PG-TRAIN] Processing batch {i+1}/{train_node_pairs.size(1)}...", flush=True)
+                        if i < 3:
+                            head_idx = train_node_pairs[0, i].item()
+                            tail_idx = train_node_pairs[1, i].item()
+                            print(f"[PG-TRAIN]   Edge: ({head_idx}, {tail_idx})", flush=True)
+                            print(f"[PG-TRAIN]   Calling explainer.algorithm.train()...", flush=True)
+
+                    # Get the head node index for this edge
+                    head_node_idx = train_node_pairs[0, i].item()
+
+                    # Train step - using the training data (subgraph or full graph)
+                    target = torch.tensor([1.0], device=device)
+                    explainer.algorithm.train(
+                        epoch=epoch,
+                        model=wrapped_model,
+                        x=training_x,
+                        edge_index=training_edge_index,
+                        target=target,
+                        index=head_node_idx,
+                        edge_type=training_edge_type
+                    )
 
                 if epoch == 0 and i < 3:
                     print(f"[PG-TRAIN]   ✓ Training step complete", flush=True)
@@ -1088,17 +1141,33 @@ def run_pgexplainer(
                         torch.cuda.empty_cache()
                 continue
 
-        # Print epoch progress
-        epoch_time = time.time() - epoch_start
-        if (epoch + 1) % 5 == 0 or epoch == 0:
-            print(f"[PG-TRAIN] Epoch {epoch+1}/{epochs}: {epoch_successful} successful, {epoch_failed} failed ({epoch_time:.1f}s)", flush=True)
+            # Print epoch progress
+            epoch_time = time.time() - epoch_start
+            if (epoch + 1) % 5 == 0 or epoch == 0:
+                print(f"[PG-TRAIN] Epoch {epoch+1}/{epochs}: {epoch_successful} successful, {epoch_failed} failed ({epoch_time:.1f}s)", flush=True)
 
-    # Training summary
-    train_time = time.time() - train_start
-    success_rate = (successful_batches / (successful_batches + failed_batches) * 100) if (successful_batches + failed_batches) > 0 else 0
-    print(f"\n[PG] ✓ PGExplainer network trained ({epochs} epochs, {train_time:.1f}s)", flush=True)
-    print(f"[PG]   Training summary: {successful_batches} successful, {failed_batches} failed ({success_rate:.1f}% success rate)", flush=True)
-    print(f"[PG]   Training subgraph: {len(subset)} nodes, {sub_edge_index.size(1)} edges", flush=True)
+        # Training summary
+        train_time = time.time() - train_start
+        success_rate = (successful_batches / (successful_batches + failed_batches) * 100) if (successful_batches + failed_batches) > 0 else 0
+        print(f"\n[PG] ✓ PGExplainer network trained ({epochs} epochs, {train_time:.1f}s)", flush=True)
+        print(f"[PG]   Training summary: {successful_batches} successful, {failed_batches} failed ({success_rate:.1f}% success rate)", flush=True)
+        print(f"[PG]   Training mode: {training_subgraph_info}", flush=True)
+
+        # Save the trained explainer
+        print(f"[PG] Saving trained explainer to {explainer_cache_path}...", flush=True)
+        checkpoint = {
+            'explainer_state_dict': explainer.algorithm.state_dict(),
+            'epochs': epochs,
+            'training_config': {
+                'lr': lr,
+                'subgraph_method': subgraph_method if not use_full_graph_training else 'full_graph',
+                'training_edges': train_node_pairs.size(1),
+                'training_mode': training_subgraph_info,
+                'success_rate': success_rate
+            }
+        }
+        torch.save(checkpoint, explainer_cache_path)
+        print(f"[PG] ✓ Trained explainer saved successfully", flush=True)
 
     # Generate explanations for selected triples
     print(f"\n[PG] Step 5/6: Generating explanations for selected triples...", flush=True)

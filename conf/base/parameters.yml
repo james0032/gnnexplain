@@ -90,7 +90,7 @@ explanation:
     subgraph_method: "paths"              # Options: "khop" (PyG k-hop), "paths" (igraph paths)
     khop_distance: 2                      # For khop method: number of hops
     max_path_length: 3                    # For paths method: maximum path length
-    use_full_graph_training: false        # Use full graph for training (slower but comprehensive)
+    use_full_graph_training: true        # Use full graph for training (slower but comprehensive)
     force_retrain: false                  # Force retraining even if cached explainer exists
 
   # PAGE parameters (Improved Parametric Generative Explainer)

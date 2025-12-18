@@ -37,11 +37,11 @@ def create_pipeline(**kwargs) -> Pipeline:
         # Step 1: Prepare model for explanation
         node(
             func=prepare_model_for_explanation,
-            inputs=[
-                "trained_model",
-                "pyg_data",
-                "params:device"
-            ],
+            inputs={
+                "trained_model_dict": "trained_model",
+                "dgl_data": "dgl_data",
+                "device_str": "params:device"
+            },
             outputs="prepared_model",
             name="prepare_model_for_explanation"
         ),
@@ -49,13 +49,13 @@ def create_pipeline(**kwargs) -> Pipeline:
         # Step 2: Select triples to explain
         node(
             func=select_triples_to_explain,
-            inputs=[
-                "pyg_data",
-                "knowledge_graph",
-                "params:explanation.triple_selection",
-                "params:device",
-                "top10_test"  # Optional: file content for "from_file" strategy
-            ],
+            inputs={
+                "dgl_data": "dgl_data",
+                "knowledge_graph": "knowledge_graph",
+                "selection_params": "params:explanation.triple_selection",
+                "device_str": "params:device",
+                "triple_file_content": "top10_test"  # Optional: file content for "from_file" strategy
+            },
             outputs="selected_triples",
             name="select_triples_to_explain"
         ),
@@ -92,12 +92,12 @@ def create_pipeline(**kwargs) -> Pipeline:
         explainer_nodes.append(
             node(
                 func=run_pgexplainer,
-                inputs=[
-                    "prepared_model",
-                    "selected_triples",
-                    "pyg_data",
-                    "params:explanation"
-                ],
+                inputs={
+                    "model_dict": "prepared_model",
+                    "selected_triples": "selected_triples",
+                    "pyg_data": "dgl_data",  # Function parameter is pyg_data but we pass dgl_data
+                    "explainer_params": "params:explanation"
+                },
                 outputs="pg_explanations",
                 name="run_pgexplainer",
                 tags=["pgexplainer", "explainer"]
@@ -109,12 +109,12 @@ def create_pipeline(**kwargs) -> Pipeline:
         explainer_nodes.append(
             node(
                 func=run_page_explainer,
-                inputs=[
-                    "prepared_model",
-                    "selected_triples",
-                    "pyg_data",
-                    "params:explanation"
-                ],
+                inputs={
+                    "model_dict": "prepared_model",
+                    "selected_triples": "selected_triples",
+                    "pyg_data": "dgl_data",  # Function parameter is pyg_data but we pass dgl_data
+                    "explainer_params": "params:explanation"
+                },
                 outputs="page_explanations",
                 name="run_page_explainer",
                 tags=["page", "explainer"]

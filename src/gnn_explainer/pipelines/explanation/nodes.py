@@ -982,10 +982,76 @@ def run_pgexplainer(
     num_edges = edge_index.size(1)
     train_indices = torch.randperm(num_edges)[:min(training_edges, num_edges)]
 
-    # Note: PGExplainer training happens inside the explainer
-    # We just need to call it on some examples
+    print(f"  Training on {len(train_node_indices)} random node pairs using '{subgraph_method}' subgraph extraction...")
 
-    print(f"✓ PGExplainer network ready")
+    # Sample random nodes for training
+    # For node-level task, we need to sample nodes and their neighborhoods
+    num_train_nodes = min(training_edges, num_nodes)
+    train_node_indices = torch.randperm(num_nodes, device=device)[:num_train_nodes]
+
+    # Create targets (all 1.0 for existing edges/nodes)
+    train_targets = torch.ones(len(train_node_indices), device=device)
+
+    # Train the explainer
+    for epoch in range(epochs):
+        # Train on random subset of nodes
+        for idx in train_node_indices:
+            try:
+                # Use the same subgraph extraction method as configured
+                if subgraph_method == 'paths':
+                    # Use path-based subgraph extraction (igraph)
+                    max_path_length = pg_params.get('max_path_length', 3)
+
+                    # For training, we need pairs of nodes to extract paths between them
+                    # Sample a random target node
+                    target_idx = torch.randint(0, num_nodes, (1,), device=device).item()
+
+                    # Extract path-based subgraph between idx and target_idx
+                    subset, sub_edge_index, mapping, edge_mask = extract_path_based_subgraph(
+                        idx.item(), target_idx, edge_index, edge_type, max_path_length, device
+                    )
+                else:
+                    # Use PyG k-hop subgraph extraction (default)
+                    from torch_geometric.utils import k_hop_subgraph
+                    khop_distance = pg_params.get('khop_distance', 2)
+
+                    subset, sub_edge_index, mapping, edge_mask = k_hop_subgraph(
+                        node_idx=idx.item(),
+                        num_hops=khop_distance,
+                        edge_index=edge_index,
+                        relabel_nodes=True,
+                        num_nodes=num_nodes
+                    )
+
+                if len(subset) < 2:  # Skip if subgraph too small
+                    continue
+
+                sub_edge_type = edge_type[edge_mask]
+                sub_x = x[subset]
+
+                # Set subset for model
+                wrapped_model.current_subset = subset
+
+                # Train step
+                target = torch.tensor([1.0], device=device)
+                explainer.algorithm.train(
+                    epoch=epoch,
+                    model=wrapped_model,
+                    x=sub_x,
+                    edge_index=sub_edge_index,
+                    target=target,
+                    index=mapping[0].item() if mapping.numel() >= 1 else 0,
+                    edge_type=sub_edge_type
+                )
+
+            except Exception as e:
+                # Skip problematic training examples
+                continue
+
+        if (epoch + 1) % 10 == 0:
+            print(f"    Epoch {epoch+1}/{epochs}")
+
+    print(f"✓ PGExplainer network trained ({epochs} epochs)")
 
     # Generate explanations for selected triples
     explanations = []

@@ -950,6 +950,8 @@ def run_pgexplainer(
 
     # Create explainer
     # PGExplainer requires 'phenomenon' explanation type instead of 'model'
+    # Note: PGExplainer does NOT support task_level='edge', so we use 'node'
+    # and explain link prediction as a node-level task on the head node
     explainer = Explainer(
         model=wrapped_model,
         algorithm=PGExplainer(epochs=epochs, lr=lr),
@@ -957,7 +959,7 @@ def run_pgexplainer(
         edge_mask_type='object',
         model_config=dict(
             mode='regression',
-            task_level='edge',
+            task_level='node',  # PGExplainer only supports 'node' or 'graph' level
             return_type='raw'
         ),
     )

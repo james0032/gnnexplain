@@ -161,17 +161,20 @@ FileNotFoundError: Cannot find DGL C++ graphbolt library at
 
 **Impact**: This only affects distributed graph operations. Standard DGL usage (including our knowledge graph pipelines) does not require graphbolt.
 
-**Fix**: Run the provided `fix_graphbolt.py` script in your environment:
+**Fix**: Run the provided `fix_graphbolt_preimport.py` script in your environment:
 
 ```bash
-python fix_graphbolt.py
+python fix_graphbolt_preimport.py
 ```
 
 This script:
-1. Locates the DGL graphbolt module in your environment
-2. Creates a backup of the original `__init__.py`
-3. Patches it to disable graphbolt with a warning
-4. Verifies DGL still works correctly
+1. Searches for DGL in your site-packages (without importing it)
+2. Locates the graphbolt module
+3. Creates a backup of the original `__init__.py`
+4. Patches it to disable graphbolt with a warning
+5. Verifies DGL works correctly after the fix
+
+**Note**: Use `fix_graphbolt_preimport.py` instead of `fix_graphbolt.py` if you get the error immediately when importing DGL.
 
 **Manual Fix** (if script doesn't work):
 

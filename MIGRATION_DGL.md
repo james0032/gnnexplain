@@ -145,3 +145,56 @@ If issues arise:
 1. Switch back to `pyg_version` branch
 2. Document issues encountered
 3. Address issues before re-attempting migration
+
+## Known Issues and Fixes
+
+### Graphbolt Compatibility Error
+
+**Issue**: On some systems (especially macOS ARM and certain Linux configurations), DGL's graphbolt C++ library may not be available:
+
+```
+FileNotFoundError: Cannot find DGL C++ graphbolt library at
+.../site-packages/dgl/graphbolt/libgraphbolt_pytorch_*.so
+```
+
+**Cause**: Graphbolt is DGL's distributed graph library. The C++ binaries may not be available for all platform/Python/PyTorch combinations.
+
+**Impact**: This only affects distributed graph operations. Standard DGL usage (including our knowledge graph pipelines) does not require graphbolt.
+
+**Fix**: Run the provided `fix_graphbolt.py` script in your environment:
+
+```bash
+python fix_graphbolt.py
+```
+
+This script:
+1. Locates the DGL graphbolt module in your environment
+2. Creates a backup of the original `__init__.py`
+3. Patches it to disable graphbolt with a warning
+4. Verifies DGL still works correctly
+
+**Manual Fix** (if script doesn't work):
+
+1. Find your DGL installation: `python -c "import dgl; print(dgl.__file__)"`
+2. Navigate to the graphbolt directory: `cd <dgl_path>/graphbolt/`
+3. Backup the original: `cp __init__.py __init__.py.backup`
+4. Replace `__init__.py` with:
+
+```python
+"""GraphBolt disabled for compatibility"""
+import warnings
+warnings.warn("Graphbolt is disabled (not needed for standard DGL usage)", RuntimeWarning)
+```
+
+### TorchData Version Compatibility
+
+**Issue**: `ModuleNotFoundError: No module named 'torchdata.datapipes'`
+
+**Cause**: TorchData 0.8.0+ removed the `datapipes` module that Kedro depends on.
+
+**Fix**: The `pyproject.toml` now pins `torchdata>=0.7.0,<0.8.0` to ensure a compatible version is installed.
+
+If you encounter this error:
+```bash
+pip install "torchdata>=0.7.0,<0.8.0"
+```

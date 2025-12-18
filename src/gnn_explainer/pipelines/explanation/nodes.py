@@ -982,12 +982,12 @@ def run_pgexplainer(
     num_edges = edge_index.size(1)
     train_indices = torch.randperm(num_edges)[:min(training_edges, num_edges)]
 
-    print(f"  Training on {len(train_node_indices)} random node pairs using '{subgraph_method}' subgraph extraction...")
-
     # Sample random nodes for training
     # For node-level task, we need to sample nodes and their neighborhoods
     num_train_nodes = min(training_edges, num_nodes)
     train_node_indices = torch.randperm(num_nodes, device=device)[:num_train_nodes]
+
+    print(f"  Training on {len(train_node_indices)} random node pairs using '{subgraph_method}' subgraph extraction...")
 
     # Create targets (all 1.0 for existing edges/nodes)
     train_targets = torch.ones(len(train_node_indices), device=device)

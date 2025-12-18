@@ -48,65 +48,53 @@ class ModelWrapper(nn.Module):
             Scores for the given edges
         """
         if self.mode == 'link_prediction':
-            # GNNExplainer requires the model to work with the SUBGRAPH edges only
-            # The edge_index passed here is the subgraph with relabeled indices (0 to len(subset)-1)
-            #
-            # However, CompGCN message passing needs the actual node indices to look up embeddings
-            # So we need to:
-            # 1. Encode on the subgraph edges (for GNNExplainer's edge masking to work)
-            # 2. But use global node IDs so CompGCN can access the right embeddings
-
             # Get edge types for the subgraph
             edge_type_for_encoding = kwargs.get('edge_type', None)
             if edge_type_for_encoding is None:
                 # Fallback: assume relation 0
                 edge_type_for_encoding = torch.zeros(edge_index.size(1), dtype=torch.long, device=edge_index.device)
 
-            # CRITICAL FIX: GNNExplainer expects contiguous node indices (0 to N-1)
-            # but CompGCN needs to access the actual node embeddings.
-            # Solution: Extract the relevant node embeddings and create a relabeled encoder call
+            # OPTIMIZED VERSION: Direct subgraph encoding without embedding manipulation
+            # The edge_index and edge_type passed here define the COMPLETE subgraph
+            # CompGCN's encode() will only do message passing on these edges
 
             if self.current_subset is not None:
-                # Get the full node embeddings (before message passing)
+                # Get the initial node embeddings for the subgraph nodes only
                 if hasattr(self.kg_model, 'encoder'):
                     full_node_emb = self.kg_model.encoder.node_emb  # CompGCN
-                    full_rel_emb = self.kg_model.encoder.rel_emb
                 else:
                     full_node_emb = self.kg_model.node_emb  # RGCN fallback
-                    full_rel_emb = self.kg_model.rel_emb
 
-                # Create a subset embedding matrix for just the subgraph nodes
-                # This creates a contiguous embedding matrix [0, 1, 2, ..., len(subset)-1]
-                # mapped from the global embeddings
+                # Extract embeddings for subgraph nodes
                 subset_node_emb = full_node_emb[self.current_subset]
 
-                # Now encode using the RELABELED edge_index (0 to len(subset)-1)
-                # with the subset embeddings
-                # We need to temporarily replace the model's embeddings
-                original_node_emb = full_node_emb.data.clone()
+                # Create a temporary minimal embedding table for just the subgraph
+                # This avoids processing the full graph
+                temp_emb_table = torch.nn.Embedding(
+                    len(self.current_subset),
+                    subset_node_emb.size(1),
+                    device=subset_node_emb.device
+                )
+                temp_emb_table.weight.data = subset_node_emb
 
-                # Create a temporary full-size embedding tensor but only populate the used indices
-                temp_node_emb = torch.zeros_like(full_node_emb)
-                temp_node_emb[:len(subset_node_emb)] = subset_node_emb
-
-                # Temporarily replace the embeddings
+                # Temporarily swap the embedding table
                 if hasattr(self.kg_model, 'encoder'):
-                    self.kg_model.encoder.node_emb.data = temp_node_emb
+                    original_emb_table = self.kg_model.encoder.node_emb
+                    self.kg_model.encoder.node_emb = temp_emb_table
                 else:
-                    self.kg_model.node_emb.data = temp_node_emb
+                    original_emb_table = self.kg_model.node_emb
+                    self.kg_model.node_emb = temp_emb_table
 
                 try:
-                    # Encode with relabeled indices
-                    node_emb, rel_emb = self.kg_model.encode(edge_index, edge_type_for_encoding)
-
-                    # Extract only the embeddings we need (for the subgraph nodes)
-                    node_emb_subset = node_emb[:len(self.current_subset)]
+                    # Encode ONLY the subgraph edges (already relabeled 0 to len(subset)-1)
+                    # This ensures message passing only happens within the subgraph
+                    node_emb_subset, rel_emb = self.kg_model.encode(edge_index, edge_type_for_encoding)
                 finally:
-                    # Restore original embeddings
+                    # Restore original embedding table
                     if hasattr(self.kg_model, 'encoder'):
-                        self.kg_model.encoder.node_emb.data = original_node_emb
+                        self.kg_model.encoder.node_emb = original_emb_table
                     else:
-                        self.kg_model.node_emb.data = original_node_emb
+                        self.kg_model.node_emb = original_emb_table
             else:
                 # No subset mapping, use original behavior
                 node_emb_subset, rel_emb = self.kg_model.encode(edge_index, edge_type_for_encoding)
@@ -988,7 +976,18 @@ def run_pgexplainer(
     print(f"  Training on {train_node_pairs.size(1)} random edge pairs (connected nodes) using '{subgraph_method}' subgraph extraction...")
 
     # Train the explainer
+    import time
+    train_start = time.time()
+    successful_batches = 0
+    failed_batches = 0
+    total_subgraph_nodes = 0
+    total_subgraph_edges = 0
+
     for epoch in range(epochs):
+        epoch_start = time.time()
+        epoch_successful = 0
+        epoch_failed = 0
+
         # Train on sampled edges (connected node pairs)
         for i in range(train_node_pairs.size(1)):
             try:
@@ -1033,6 +1032,11 @@ def run_pgexplainer(
                 # Set subset for model
                 wrapped_model.current_subset = subset
 
+                # Track subgraph sizes (only for first epoch to avoid redundant counting)
+                if epoch == 0:
+                    total_subgraph_nodes += len(subset)
+                    total_subgraph_edges += sub_edge_index.size(1)
+
                 # Train step
                 target = torch.tensor([1.0], device=device)
                 explainer.algorithm.train(
@@ -1045,7 +1049,12 @@ def run_pgexplainer(
                     edge_type=sub_edge_type
                 )
 
+                epoch_successful += 1
+                successful_batches += 1
+
             except Exception as e:
+                epoch_failed += 1
+                failed_batches += 1
                 # Skip problematic training examples, but log for debugging
                 if "CUDA" in str(e):
                     print(f"\n      Warning: CUDA error during training on edge ({head_idx}, {tail_idx}): {e}")
@@ -1054,10 +1063,19 @@ def run_pgexplainer(
                         torch.cuda.empty_cache()
                 continue
 
-        if (epoch + 1) % 10 == 0:
-            print(f"    Epoch {epoch+1}/{epochs}")
+        # Print epoch progress
+        epoch_time = time.time() - epoch_start
+        if (epoch + 1) % 5 == 0 or epoch == 0:
+            print(f"    Epoch {epoch+1}/{epochs}: {epoch_successful} successful, {epoch_failed} failed ({epoch_time:.1f}s)")
 
-    print(f"✓ PGExplainer network trained ({epochs} epochs)")
+    # Training summary
+    train_time = time.time() - train_start
+    success_rate = (successful_batches / (successful_batches + failed_batches) * 100) if (successful_batches + failed_batches) > 0 else 0
+    avg_subgraph_nodes = total_subgraph_nodes / successful_batches if successful_batches > 0 else 0
+    avg_subgraph_edges = total_subgraph_edges / successful_batches if successful_batches > 0 else 0
+    print(f"\n✓ PGExplainer network trained ({epochs} epochs, {train_time:.1f}s)")
+    print(f"  Training summary: {successful_batches} successful, {failed_batches} failed ({success_rate:.1f}% success rate)")
+    print(f"  Average subgraph size: {avg_subgraph_nodes:.1f} nodes, {avg_subgraph_edges:.1f} edges")
 
     # Generate explanations for selected triples
     explanations = []

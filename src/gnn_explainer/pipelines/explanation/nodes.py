@@ -949,13 +949,13 @@ def run_pgexplainer(
     print(f"      then generates explanations efficiently for all instances.")
 
     # Create explainer
-    # PGExplainer requires 'phenomenon' explanation type instead of 'model'
     # Note: PGExplainer does NOT support task_level='edge', so we use 'node'
     # and explain link prediction as a node-level task on the head node
+    # Using 'phenomenon' type to explain why specific links are predicted to exist
     explainer = Explainer(
         model=wrapped_model,
         algorithm=PGExplainer(epochs=epochs, lr=lr),
-        explanation_type='phenomenon',
+        explanation_type='phenomenon',  # Explain specific phenomenon (link existence)
         edge_mask_type='object',
         model_config=dict(
             mode='regression',
@@ -1068,11 +1068,17 @@ def run_pgexplainer(
             # This allows the model to map relabeled subgraph indices back to global indices
             wrapped_model.current_subset = subset
 
+            # For PGExplainer, get the target (model prediction for the link)
+            # Since we're explaining test triples, the target is 1 (link exists)
+            # For node-level task, the target is a scalar value for that node
+            target = torch.tensor([1.0], device=device)
+
             explanation = explainer(
                 x=sub_x,
                 edge_index=sub_edge_index,
                 edge_type=sub_edge_type,  # Use subgraph edge types
-                index=head_node_remapped  # Explain from the remapped head node
+                index=head_node_remapped,  # Explain from the remapped head node
+                target=target  # Target: 1.0 = link exists (test triple)
             )
 
             triple_time = time.time() - triple_start

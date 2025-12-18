@@ -56,7 +56,7 @@ explanation:
   # Explainer selection - which explainers to run
   # Options: ["gnnexplainer", "pgexplainer", "page"]
   # Set to a list of explainers you want to run, or ["all"] to run all explainers
-  enabled_explainers: ["pgexplainer"]  # Run only PGExplainer for testing
+  enabled_explainers: ["gnnexplainer", "pgexplainer", "page"]  # Run only PGExplainer for testing
 
   # Triple selection parameters
   triple_selection:

@@ -6,6 +6,7 @@ from .nodes import (
     load_dictionaries,
     load_triples_from_files,
     create_knowledge_graph,
+    convert_to_dgl_format,
     convert_to_pyg_format,
     generate_negative_samples_node,
 )
@@ -51,14 +52,14 @@ def create_pipeline(**kwargs) -> Pipeline:
             name="create_kg_node",
         ),
         node(
-            func=convert_to_pyg_format,
+            func=convert_to_dgl_format,
             inputs="knowledge_graph",
-            outputs="pyg_data",
-            name="convert_to_pyg_node",
+            outputs="dgl_data",
+            name="convert_to_dgl_node",
         ),
         node(
             func=generate_negative_samples_node,
-            inputs=["pyg_data", "params:evaluation.num_neg_samples"],
+            inputs=["dgl_data", "params:evaluation.num_neg_samples"],
             outputs="negative_samples",
             name="generate_neg_samples_node",
         ),

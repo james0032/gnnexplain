@@ -4,9 +4,11 @@ import logging
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
+import dgl
 from typing import Dict
 from .model import RGCNDistMultModel
 from .kg_models import CompGCNKGModel
+from .kg_models_dgl import CompGCNKGModelDGL
 from ..utils import generate_negative_samples
 from gnn_explainer.utils.mlflow_utils import (
     log_params_from_dict,
@@ -18,21 +20,23 @@ logger = logging.getLogger(__name__)
 
 
 def train_model(
-    pyg_data: Dict,
-    knowledge_graph: Dict,
-    model_params: Dict,
-    training_params: Dict,
-    device_str: str
+    dgl_data: Dict = None,
+    pyg_data: Dict = None,
+    knowledge_graph: Dict = None,
+    model_params: Dict = None,
+    training_params: Dict = None,
+    device_str: str = "cuda"
 ) -> Dict:
     """
     Train KG embedding model with early stopping.
 
     Supports multiple model architectures:
-    - RGCN + DistMult
-    - CompGCN + (DistMult | ComplEx | RotatE | ConvE)
+    - RGCN + DistMult (PyG only)
+    - CompGCN + (DistMult | ComplEx | RotatE | ConvE) (DGL or PyG)
 
     Args:
-        pyg_data: PyG format graph data
+        dgl_data: DGL format graph data (preferred)
+        pyg_data: PyG format graph data (legacy, for backward compatibility)
         knowledge_graph: Knowledge graph with dictionaries
         model_params: Model hyperparameters
         training_params: Training configuration
@@ -41,6 +45,12 @@ def train_model(
     Returns:
         Dictionary with trained model state and metadata
     """
+    # Determine which data format to use
+    use_dgl = dgl_data is not None
+    graph_data = dgl_data if use_dgl else pyg_data
+
+    if graph_data is None:
+        raise ValueError("Either dgl_data or pyg_data must be provided")
     print("\n" + "="*60)
     print("STARTING MODEL TRAINING")
     print("="*60)
@@ -63,6 +73,7 @@ def train_model(
     if model_type == 'compgcn':
         # CompGCN with selected decoder
         print(f"  Composition function: {model_params.get('comp_fn', 'sub')}")
+        print(f"  Using {'DGL' if use_dgl else 'PyG'} backend")
 
         # ConvE-specific parameters
         conve_kwargs = {}
@@ -75,7 +86,10 @@ def train_model(
                 'kernel_size': model_params.get('conve_kernel_size', 3),
             }
 
-        model = CompGCNKGModel(
+        # Choose DGL or PyG model
+        ModelClass = CompGCNKGModelDGL if use_dgl else CompGCNKGModel
+
+        model = ModelClass(
             num_nodes=knowledge_graph['num_nodes'],
             num_relations=knowledge_graph['num_relations'],
             embedding_dim=model_params['embedding_dim'],
@@ -119,10 +133,19 @@ def train_model(
     )
 
     # Move graph data to device
-    edge_index = pyg_data['edge_index'].to(device)
-    edge_type = pyg_data['edge_type'].to(device)
-    train_triples = pyg_data['train_triples']
-    val_triples = pyg_data['val_triples']
+    if use_dgl:
+        # DGL graph
+        g = graph_data['graph'].to(device)
+        edge_index = graph_data['edge_index'].to(device)
+        edge_type = graph_data['edge_type'].to(device)
+    else:
+        # PyG format
+        edge_index = graph_data['edge_index'].to(device)
+        edge_type = graph_data['edge_type'].to(device)
+        g = None
+
+    train_triples = graph_data['train_triples']
+    val_triples = graph_data['val_triples']
 
     # Training loop
     print(f"\nStarting training for {training_params['num_epochs']} epochs...")
@@ -171,12 +194,21 @@ def train_model(
 
             optimizer.zero_grad()
 
-            scores = model(
-                edge_index, edge_type,
-                batch_triples[:, 0],
-                batch_triples[:, 2],
-                batch_triples[:, 1]
-            )
+            # Forward pass (DGL or PyG)
+            if use_dgl:
+                scores = model(
+                    g=g,
+                    head_idx=batch_triples[:, 0],
+                    tail_idx=batch_triples[:, 2],
+                    rel_idx=batch_triples[:, 1]
+                )
+            else:
+                scores = model(
+                    edge_index, edge_type,
+                    batch_triples[:, 0],
+                    batch_triples[:, 2],
+                    batch_triples[:, 1]
+                )
 
             loss = F.binary_cross_entropy_with_logits(scores, batch_labels)
             loss.backward()
@@ -221,12 +253,21 @@ def train_model(
                 batch_triples = val_all_triples[i:i+batch_size].to(device)
                 batch_labels = val_labels[i:i+batch_size]
 
-                scores = model(
-                    edge_index, edge_type,
-                    batch_triples[:, 0],
-                    batch_triples[:, 2],
-                    batch_triples[:, 1]
-                )
+                # Forward pass (DGL or PyG)
+                if use_dgl:
+                    scores = model(
+                        g=g,
+                        head_idx=batch_triples[:, 0],
+                        tail_idx=batch_triples[:, 2],
+                        rel_idx=batch_triples[:, 1]
+                    )
+                else:
+                    scores = model(
+                        edge_index, edge_type,
+                        batch_triples[:, 0],
+                        batch_triples[:, 2],
+                        batch_triples[:, 1]
+                    )
 
                 loss = F.binary_cross_entropy_with_logits(scores, batch_labels)
                 val_loss += loss.item()
@@ -285,9 +326,10 @@ def train_model(
 
 def compute_test_scores(
     trained_model_artifact: Dict,
-    pyg_data: Dict,
-    knowledge_graph: Dict,
-    device_str: str,
+    dgl_data: Dict = None,
+    pyg_data: Dict = None,
+    knowledge_graph: Dict = None,
+    device_str: str = "cuda",
     batch_size: int = 1024
 ) -> Dict:
     """
@@ -295,13 +337,21 @@ def compute_test_scores(
 
     Args:
         trained_model_artifact: Trained model artifact from training
-        pyg_data: PyG format graph data
+        dgl_data: DGL format graph data (preferred)
+        pyg_data: PyG format graph data (legacy)
+        knowledge_graph: Knowledge graph with dictionaries
         device_str: Device string ("cuda" or "cpu")
         batch_size: Batch size for scoring
 
     Returns:
         Dictionary with test triples and their prediction scores
     """
+    # Determine which data format to use
+    use_dgl = dgl_data is not None
+    graph_data = dgl_data if use_dgl else pyg_data
+
+    if graph_data is None:
+        raise ValueError("Either dgl_data or pyg_data must be provided")
     print("\n" + "="*60)
     print("COMPUTING TEST TRIPLE SCORES")
     print("="*60)

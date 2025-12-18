@@ -35,6 +35,11 @@ knowledge_graph:
   type: pickle.PickleDataset
   filepath: data/02_intermediate/knowledge_graph.pkl
 
+dgl_data:
+  type: pickle.PickleDataset
+  filepath: data/02_intermediate/dgl_data.pkl
+
+# Legacy PyG data (kept for backward compatibility)
 pyg_data:
   type: pickle.PickleDataset
   filepath: data/02_intermediate/pyg_data.pkl

@@ -12,7 +12,8 @@ dependencies = [
     "kedro-datasets[pandas-csvdataset, pickle-pickledataset]>=3.0",
     "kedro-viz>=6.7.0",
     "torch>=2.0.0",
-    "torch-geometric>=2.3.0",
+    "dgl>=1.1.0",
+    "dgllife>=0.3.2",
     "networkx>=3.0",
     "matplotlib>=3.5.0",
     "numpy>=1.24.0",
@@ -35,6 +36,11 @@ dev = [
     "ruff>=0.1.8",
     "ipython>=8.10",
     "jupyterlab>=3.0",
+]
+pyg = [
+    "torch-geometric>=2.3.0",
+    "torch-scatter>=2.1.0",
+    "torch-sparse>=0.6.0",
 ]
 
 [tool.setuptools.dynamic]

@@ -14,13 +14,13 @@ def create_pipeline(**kwargs) -> Pipeline:
     return pipeline([
         node(
             func=train_model,
-            inputs=[
-                "pyg_data",
-                "knowledge_graph",
-                "params:model",
-                "params:training",
-                "params:device"
-            ],
+            inputs={
+                "dgl_data": "dgl_data",
+                "knowledge_graph": "knowledge_graph",
+                "model_params": "params:model",
+                "training_params": "params:training",
+                "device_str": "params:device"
+            },
             outputs="trained_model_artifact",
             name="train_model",
         ),
@@ -28,7 +28,7 @@ def create_pipeline(**kwargs) -> Pipeline:
             func=compute_test_scores,
             inputs=[
                 "trained_model_artifact",
-                "pyg_data",
+                "dgl_data",
                 "knowledge_graph",
                 "params:device"
             ],

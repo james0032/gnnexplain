@@ -1,6 +1,7 @@
 """Nodes for data preparation pipeline."""
 
 import torch
+import dgl
 import pandas as pd
 from typing import Dict, Tuple
 from ..utils import generate_negative_samples
@@ -173,11 +174,82 @@ def create_knowledge_graph(
     return kg_data
 
 
+def convert_to_dgl_format(
+    knowledge_graph: Dict
+) -> Dict:
+    """
+    Convert to DGL graph format.
+
+    Args:
+        knowledge_graph: Knowledge graph data
+
+    Returns:
+        DGL-compatible data structure with graph object
+    """
+    print(f"\nConverting to DGL graph format...")
+
+    # Use training + validation triples for the graph structure
+    # (test triples are held out for evaluation)
+    graph_triples = torch.cat([
+        knowledge_graph['train_triples'],
+        knowledge_graph['val_triples']
+    ], dim=0)
+
+    # Extract source nodes, destination nodes, and edge types
+    src_nodes = graph_triples[:, 0]  # head entities
+    dst_nodes = graph_triples[:, 2]  # tail entities
+    edge_types = graph_triples[:, 1]  # relation types
+
+    # Add reverse edges for bidirectional message passing
+    reverse_src = graph_triples[:, 2]
+    reverse_dst = graph_triples[:, 0]
+    reverse_types = graph_triples[:, 1]  # Same relation type
+
+    # Combine forward and reverse edges
+    all_src = torch.cat([src_nodes, reverse_src], dim=0)
+    all_dst = torch.cat([dst_nodes, reverse_dst], dim=0)
+    all_types = torch.cat([edge_types, reverse_types], dim=0)
+
+    # Create DGL graph
+    num_nodes = knowledge_graph['num_nodes']
+    g = dgl.graph((all_src, all_dst), num_nodes=num_nodes)
+
+    # Store edge types as edge data
+    g.edata['etype'] = all_types
+
+    # Store edge direction (0=forward, 1=reverse) for potential future use
+    edge_direction = torch.cat([
+        torch.zeros(len(src_nodes), dtype=torch.long),
+        torch.ones(len(reverse_src), dtype=torch.long)
+    ], dim=0)
+    g.edata['direction'] = edge_direction
+
+    print(f"  Created DGL graph with {g.num_nodes()} nodes and {g.num_edges()} edges")
+    print(f"  Forward edges: {len(src_nodes)}, Reverse edges: {len(reverse_src)}")
+
+    # Also store edge_index and edge_type for backward compatibility
+    edge_index = torch.stack([all_src, all_dst], dim=0)
+
+    return {
+        'graph': g,
+        'edge_index': edge_index,
+        'edge_type': all_types,
+        'num_nodes': knowledge_graph['num_nodes'],
+        'num_relations': knowledge_graph['num_relations'],
+        'train_triples': knowledge_graph['train_triples'],
+        'val_triples': knowledge_graph['val_triples'],
+        'test_triples': knowledge_graph['test_triples'],
+        'all_triples': knowledge_graph['all_triples']
+    }
+
+
 def convert_to_pyg_format(
     knowledge_graph: Dict
 ) -> Dict:
     """
-    Convert to PyTorch Geometric format.
+    Convert to PyTorch Geometric format (LEGACY - for backward compatibility).
+
+    DEPRECATED: Use convert_to_dgl_format() instead.
 
     Args:
         knowledge_graph: Knowledge graph data
@@ -185,7 +257,8 @@ def convert_to_pyg_format(
     Returns:
         PyG-compatible data structure
     """
-    print(f"\nConverting to PyTorch Geometric format...")
+    print(f"\n⚠ WARNING: Using legacy PyG format. Consider using DGL format instead.")
+    print(f"Converting to PyTorch Geometric format...")
 
     # Use training + validation triples for the graph structure
     # (test triples are held out for evaluation)
@@ -223,26 +296,26 @@ def convert_to_pyg_format(
 
 
 def generate_negative_samples_node(
-    pyg_data: Dict,
+    graph_data: Dict,
     num_neg_samples: int
 ) -> torch.Tensor:
     """
     Generate negative samples for evaluation.
 
     Args:
-        pyg_data: PyG data structure
+        graph_data: Graph data structure (DGL or PyG format)
         num_neg_samples: Number of negative samples per positive
 
     Returns:
         Negative samples tensor
     """
     print(f"\nGenerating negative samples for evaluation...")
-    print(f"  Positive test triples: {len(pyg_data['test_triples'])}")
+    print(f"  Positive test triples: {len(graph_data['test_triples'])}")
     print(f"  Negatives per positive: {num_neg_samples}")
 
     negative_samples = generate_negative_samples(
-        pyg_data['test_triples'],
-        pyg_data['num_nodes'],
+        graph_data['test_triples'],
+        graph_data['num_nodes'],
         num_negatives=num_neg_samples
     )
 

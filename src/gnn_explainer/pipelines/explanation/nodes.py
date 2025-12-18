@@ -252,7 +252,8 @@ def extract_path_based_subgraph(
 
 def prepare_model_for_explanation(
     trained_model_dict: Dict,
-    pyg_data: Dict,
+    dgl_data: Dict = None,
+    pyg_data: Dict = None,
     device_str: str = "cpu"
 ) -> Dict:
     """
@@ -260,21 +261,30 @@ def prepare_model_for_explanation(
 
     Args:
         trained_model_dict: Dictionary with model state and metadata
-        pyg_data: PyG format graph data
+        dgl_data: DGL format graph data (preferred)
+        pyg_data: PyG format graph data (legacy)
         device_str: Device string ("cuda" or "cpu")
 
     Returns:
         Dictionary with wrapped model and graph data
     """
+    # Determine which data format to use
+    use_dgl = dgl_data is not None
+    graph_data = dgl_data if use_dgl else pyg_data
+
+    if graph_data is None:
+        raise ValueError("Either dgl_data or pyg_data must be provided")
     print("\n" + "="*60)
     print("PREPARING MODEL FOR EXPLANATION")
     print("="*60)
 
     device = torch.device(device_str if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+    print(f"Using {'DGL' if use_dgl else 'PyG'} graph format")
 
     # Recreate model from saved state
     from ..training.kg_models import CompGCNKGModel
+    from ..training.kg_models_dgl import CompGCNKGModelDGL
     from ..training.model import RGCNDistMultModel
 
     # Extract model configuration (handles both old 'metadata' and new 'model_config' format)
@@ -285,7 +295,10 @@ def prepare_model_for_explanation(
     print(f"  Decoder: {model_config['decoder_type']}")
 
     if model_type == 'compgcn':
-        model = CompGCNKGModel(
+        # Choose DGL or PyG model based on data format
+        ModelClass = CompGCNKGModelDGL if use_dgl else CompGCNKGModel
+
+        model = ModelClass(
             num_nodes=model_config['num_nodes'],
             num_relations=model_config['num_relations'],
             embedding_dim=model_config['embedding_dim'],
@@ -296,6 +309,9 @@ def prepare_model_for_explanation(
             conve_kwargs=model_config.get('conve_kwargs')
         )
     elif model_type == 'rgcn':
+        if use_dgl:
+            raise NotImplementedError("RGCN with DGL is not yet implemented. Use CompGCN or PyG format.")
+
         model = RGCNDistMultModel(
             num_nodes=model_config['num_nodes'],
             num_relations=model_config['num_relations'],
@@ -315,8 +331,13 @@ def prepare_model_for_explanation(
     print(f"✓ Model loaded successfully")
 
     # Wrap model for Explainer API
-    edge_index = pyg_data['edge_index'].to(device)
-    edge_type = pyg_data['edge_type'].to(device)
+    edge_index = graph_data['edge_index'].to(device)
+    edge_type = graph_data['edge_type'].to(device)
+
+    # Get DGL graph if available
+    g = graph_data.get('graph') if use_dgl else None
+    if g is not None:
+        g = g.to(device)
 
     wrapped_model = ModelWrapper(
         kg_model=model,
@@ -327,21 +348,28 @@ def prepare_model_for_explanation(
 
     print(f"✓ Model wrapped for explanation")
 
-    return {
+    result = {
         'model': model,
         'wrapped_model': wrapped_model,
         'edge_index': edge_index,
         'edge_type': edge_type,
         'num_nodes': model_config['num_nodes'],
         'num_relations': model_config['num_relations'],
-        'device': device
+        'device': device,
+        'use_dgl': use_dgl
     }
+
+    if use_dgl and g is not None:
+        result['graph'] = g
+
+    return result
 
 
 def select_triples_to_explain(
-    pyg_data: Dict,
-    knowledge_graph: Dict,
-    selection_params: Dict,
+    dgl_data: Dict = None,
+    pyg_data: Dict = None,
+    knowledge_graph: Dict = None,
+    selection_params: Dict = None,
     device_str: str = "cpu",
     triple_file_content: str = None
 ) -> Dict:
@@ -349,7 +377,10 @@ def select_triples_to_explain(
     Select triples (edges) to explain.
 
     Args:
-        pyg_data: PyG format graph data
+        dgl_data: DGL format graph data (preferred)
+        pyg_data: PyG format graph data (legacy)
+        knowledge_graph: Knowledge graph with dictionaries
+        selection_params: Selection configuration
         knowledge_graph: Knowledge graph with dictionaries
         selection_params: Parameters for selecting triples
         device_str: Device string

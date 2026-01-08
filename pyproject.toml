@@ -13,6 +13,7 @@ dependencies = [
     "kedro-viz>=6.7.0",
     "torch>=2.0.0",
     "torchdata>=0.7.0,<0.8.0",
+    # Note: Default DGL is CPU-only. For CUDA support, install with: pip install .[cuda]
     "dgl>=1.1.0",
     "dgllife>=0.3.2",
     "networkx>=3.0",
@@ -42,6 +43,14 @@ pyg = [
     "torch-geometric>=2.3.0",
     "torch-scatter>=2.1.0",
     "torch-sparse>=0.6.0",
+]
+cuda = [
+    # CUDA-enabled DGL for GPU acceleration
+    # Install with: pip install -e .[cuda]
+    # Requires NVIDIA GPU and appropriate CUDA toolkit installed
+    # Supported CUDA versions: 11.8, 12.1
+    # Visit https://www.dgl.ai/pages/start.html for more options
+    "dgl-cu118>=1.1.0; platform_system != 'Darwin'",
 ]
 
 [tool.setuptools.dynamic]

@@ -17,6 +17,10 @@ knowledge_graph:
   type: pickle.PickleDataset
   filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/02_intermediate/knowledge_graph.pkl
 
+dgl_data:
+  type: pickle.PickleDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/02_intermediate/dgl_data.pkl
+
 pyg_data:
   type: pickle.PickleDataset
   filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/02_intermediate/pyg_data.pkl

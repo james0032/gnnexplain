@@ -26,12 +26,12 @@ def create_pipeline(**kwargs) -> Pipeline:
         ),
         node(
             func=compute_test_scores,
-            inputs=[
-                "trained_model_artifact",
-                "dgl_data",
-                "knowledge_graph",
-                "params:device"
-            ],
+            inputs={
+                "trained_model_artifact": "trained_model_artifact",
+                "dgl_data": "dgl_data",
+                "knowledge_graph": "knowledge_graph",
+                "device_str": "params:device"
+            },
             outputs=["test_triple_scores", "test_triple_scores_csv", "top10_test"],
             name="compute_test_scores",
         ),

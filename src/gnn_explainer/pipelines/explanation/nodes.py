@@ -56,28 +56,52 @@ class ModelWrapper(nn.Module):
                 # Fallback: assume relation 0
                 edge_type_for_encoding = torch.zeros(edge_index.size(1), dtype=torch.long, device=edge_index.device)
 
-            # When using subgraph, always map relabeled indices back to original indices
-            # This avoids index out of bounds errors in the decoder
+            # CRITICAL FIX: For subset optimization, we need to extract subset embeddings
+            # BEFORE encoding, then let CompGCN do message passing on the relabeled subgraph
             if self.current_subset is not None:
-                # Map relabeled indices (0 to len(subset)-1) back to original graph indices
-                edge_index_original = torch.stack([
-                    self.current_subset[edge_index[0]],
-                    self.current_subset[edge_index[1]]
-                ])
+                # Get the encoder
+                if hasattr(self.kg_model, 'encoder'):
+                    encoder = self.kg_model.encoder
+                else:
+                    encoder = self.kg_model
 
-                # Encode using the original indices with full graph
-                # CompGCN will use message passing on these edges
-                node_emb_full, rel_emb = self.kg_model.encode(edge_index_original, edge_type_for_encoding)
+                # Extract initial embeddings for the subset nodes (before message passing)
+                # These are from the full graph's trained embedding table
+                full_node_emb = encoder.node_emb.weight  # [num_nodes_full, emb_dim]
+                subset_node_emb_init = full_node_emb[self.current_subset]  # [len(subset), emb_dim]
 
-                # Extract only the embeddings for nodes in the subset
-                node_emb_subset = node_emb_full[self.current_subset]
+                # Temporarily replace the embedding table with subset embeddings
+                # Store original for restoration
+                original_emb_weight = encoder.node_emb.weight.data
+                original_num_embeddings = encoder.node_emb.num_embeddings
 
-                # For decoding, we use the relabeled subgraph indices
-                head_idx_subgraph = edge_index[0]
-                tail_idx_subgraph = edge_index[1]
+                # Create a new embedding with subset size
+                device = encoder.node_emb.weight.device
+                subset_embedding = torch.nn.Embedding(len(self.current_subset), encoder.node_emb.embedding_dim)
+                subset_embedding.weight.data = subset_node_emb_init.clone()
+                subset_embedding = subset_embedding.to(device)
 
-                # Decode using subset embeddings with relabeled indices
-                scores = self.kg_model.decode(node_emb_subset, rel_emb, head_idx_subgraph, tail_idx_subgraph, edge_type_for_encoding)
+                # Temporarily replace the embedding
+                encoder.node_emb = subset_embedding
+
+                try:
+                    # Now encode with RELABELED indices (0 to len(subset)-1)
+                    # CompGCN will use message passing on the subgraph edges
+                    node_emb_subset, rel_emb = self.kg_model.encode(edge_index, edge_type_for_encoding)
+
+                    # Decode using the relabeled indices directly
+                    head_idx_subgraph = edge_index[0]
+                    tail_idx_subgraph = edge_index[1]
+
+                    scores = self.kg_model.decode(node_emb_subset, rel_emb, head_idx_subgraph, tail_idx_subgraph, edge_type_for_encoding)
+
+                finally:
+                    # Restore original embedding table
+                    original_embedding = torch.nn.Embedding(original_num_embeddings, encoder.node_emb.embedding_dim)
+                    original_embedding.weight.data = original_emb_weight
+                    original_embedding = original_embedding.to(device)
+                    encoder.node_emb = original_embedding
+
             else:
                 # No subgraph extraction - use full graph (shouldn't happen in explanation)
                 node_emb, rel_emb = self.kg_model.encode(edge_index, edge_type_for_encoding)

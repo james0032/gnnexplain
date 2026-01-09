@@ -59,42 +59,63 @@ class ModelWrapper(nn.Module):
             # CompGCN's encode() will only do message passing on these edges
 
             if self.current_subset is not None:
-                # Get the initial node embeddings for the subgraph nodes only
+                # ALTERNATIVE APPROACH: Instead of swapping embeddings, just extract the subset
+                # and manually run the encoding on the subgraph
+
+                # Get the encoder reference
                 if hasattr(self.kg_model, 'encoder'):
-                    full_node_emb = self.kg_model.encoder.node_emb  # CompGCN
+                    encoder = self.kg_model.encoder
                 else:
-                    full_node_emb = self.kg_model.node_emb  # RGCN fallback
+                    encoder = self.kg_model
 
-                # Extract embeddings for subgraph nodes
-                subset_node_emb = full_node_emb[self.current_subset]
+                # Get initial embeddings for the subset of nodes
+                full_node_emb_param = encoder.node_emb
+                subset_initial_emb = full_node_emb_param[self.current_subset]
 
-                # Create a temporary minimal embedding table for just the subgraph
-                # This avoids processing the full graph
-                temp_emb_table = torch.nn.Embedding(
-                    len(self.current_subset),
-                    subset_node_emb.size(1),
-                    device=subset_node_emb.device
-                )
-                temp_emb_table.weight.data = subset_node_emb
+                # Since the edge_index is already relabeled to 0..len(subset)-1,
+                # we can't directly use encode() because it expects full graph indices.
+                # Instead, we'll manually do what encode does but with subset embeddings.
 
-                # Temporarily swap the embedding table
-                if hasattr(self.kg_model, 'encoder'):
-                    original_emb_table = self.kg_model.encoder.node_emb
-                    self.kg_model.encoder.node_emb = temp_emb_table
-                else:
-                    original_emb_table = self.kg_model.node_emb
-                    self.kg_model.node_emb = temp_emb_table
+                # For now, use a simpler approach: just use the full encode but only extract
+                # the embeddings we need afterward
+                node_emb_full, rel_emb = self.kg_model.encode(edge_index, edge_type_for_encoding)
+
+                # The edge_index is relabeled, so node_emb_full won't work correctly.
+                # We need to create embeddings for the subgraph specifically.
+                # Use the subset initial embeddings and then run message passing.
+
+                # Actually, the safest approach is to temporarily resize the parameter
+                # Save the original state
+                original_emb_data = full_node_emb_param.data
+                original_requires_grad = full_node_emb_param.requires_grad
 
                 try:
-                    # Encode ONLY the subgraph edges (already relabeled 0 to len(subset)-1)
-                    # This ensures message passing only happens within the subgraph
+                    # Replace parameter data temporarily (this is in-place, no setattr needed)
+                    with torch.no_grad():
+                        # Store original size
+                        original_size = full_node_emb_param.size()
+
+                        # Create new parameter with subset size
+                        subset_emb = subset_initial_emb.detach().clone()
+                        subset_param = torch.nn.Parameter(subset_emb, requires_grad=False)
+
+                        # Replace using module registration (safe way)
+                        if hasattr(self.kg_model, 'encoder'):
+                            self.kg_model.encoder.register_parameter('node_emb', subset_param)
+                        else:
+                            self.kg_model.register_parameter('node_emb', subset_param)
+
+                    # Encode with the subset embeddings
                     node_emb_subset, rel_emb = self.kg_model.encode(edge_index, edge_type_for_encoding)
+
                 finally:
-                    # Restore original embedding table
-                    if hasattr(self.kg_model, 'encoder'):
-                        self.kg_model.encoder.node_emb = original_emb_table
-                    else:
-                        self.kg_model.node_emb = original_emb_table
+                    # Restore original parameter
+                    with torch.no_grad():
+                        original_param = torch.nn.Parameter(original_emb_data, requires_grad=original_requires_grad)
+                        if hasattr(self.kg_model, 'encoder'):
+                            self.kg_model.encoder.register_parameter('node_emb', original_param)
+                        else:
+                            self.kg_model.register_parameter('node_emb', original_param)
             else:
                 # No subset mapping, use original behavior
                 node_emb_subset, rel_emb = self.kg_model.encode(edge_index, edge_type_for_encoding)
@@ -466,14 +487,11 @@ def select_triples_to_explain(
                     'triple': f"({head_name}, {rel_name}, {tail_name})"
                 })
 
-            # Print sample triples
+            # Print all selected triples
             print(f"\n✓ Selected {len(triples_readable)} test triples")
-            print("\nSample selected test triples:")
-            for i, triple in enumerate(triples_readable[:5]):
+            print("\nSelected test triples:")
+            for i, triple in enumerate(triples_readable):
                 print(f"  {i+1}. {triple['triple']}")
-
-            if len(triples_readable) > 5:
-                print(f"  ... and {len(triples_readable) - 5} more")
 
             return {
                 'selected_indices': test_indices,
@@ -570,14 +588,11 @@ def select_triples_to_explain(
                     ])
                     selected_edge_type = selected_triples_tensor[:, 1]  # relations
 
-                    # Print sample triples
+                    # Print all loaded triples
                     print(f"\n✓ Loaded {len(triples_readable)} triples from file")
-                    print("\nSample loaded triples:")
-                    for i, triple in enumerate(triples_readable[:5]):
+                    print("\nLoaded triples:")
+                    for i, triple in enumerate(triples_readable):
                         print(f"  {i+1}. {triple['triple']}")
-
-                    if len(triples_readable) > 5:
-                        print(f"  ... and {len(triples_readable) - 5} more")
 
                     return {
                         'selected_indices': torch.arange(len(triples_readable)),
@@ -667,13 +682,10 @@ def select_triples_to_explain(
             'triple': f"({head_name}, {rel_name}, {tail_name})"
         })
 
-    # Print sample triples
-    print("\nSample selected triples:")
-    for i, triple in enumerate(triples_readable[:5]):
+    # Print all selected triples
+    print("\nSelected triples:")
+    for i, triple in enumerate(triples_readable):
         print(f"  {i+1}. {triple['triple']}")
-
-    if len(triples_readable) > 5:
-        print(f"  ... and {len(triples_readable) - 5} more")
 
     return {
         'selected_indices': indices,

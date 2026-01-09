@@ -393,13 +393,22 @@ def select_triples_to_explain(
     print("SELECTING TRIPLES TO EXPLAIN")
     print("="*60)
 
+    # Determine which data format to use
+    use_dgl = dgl_data is not None
+    graph_data = dgl_data if use_dgl else pyg_data
+
+    if graph_data is None:
+        raise ValueError("Either dgl_data or pyg_data must be provided")
+
+    print(f"Using {'DGL' if use_dgl else 'PyG'} graph format")
+
     device = torch.device(device_str if torch.cuda.is_available() else "cpu")
 
     selection_strategy = selection_params.get('strategy', 'random')
     num_triples = selection_params.get('num_triples', 10)
 
-    edge_index = pyg_data['edge_index']
-    edge_type = pyg_data['edge_type']
+    edge_index = graph_data['edge_index']
+    edge_type = graph_data['edge_type']
     num_edges = edge_index.size(1)
 
     print(f"\nSelection strategy: {selection_strategy}")
@@ -412,10 +421,10 @@ def select_triples_to_explain(
 
     elif selection_strategy == 'test_triples':
         # Select from test triples
-        test_triples = pyg_data.get('test_triples', None)
+        test_triples = graph_data.get('test_triples', None)
 
         if test_triples is None:
-            print("Warning: No test triples found in pyg_data, falling back to random")
+            print(f"Warning: No test triples found in {'dgl_data' if use_dgl else 'pyg_data'}, falling back to random")
             indices = torch.randperm(num_edges)[:num_triples]
         else:
             print(f"Total test triples available: {len(test_triples)}")

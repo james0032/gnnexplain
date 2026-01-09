@@ -16,6 +16,8 @@ def create_pipeline(**kwargs) -> Pipeline:
     """
     Create the data preparation pipeline.
 
+    NOTE: Changed to generate pyg_data instead of dgl_data for full PyG pipeline compatibility.
+
     Returns:
         A Pipeline object for data preparation
     """
@@ -52,14 +54,14 @@ def create_pipeline(**kwargs) -> Pipeline:
             name="create_kg_node",
         ),
         node(
-            func=convert_to_dgl_format,
+            func=convert_to_pyg_format,  # Changed from convert_to_dgl_format
             inputs="knowledge_graph",
-            outputs="dgl_data",
-            name="convert_to_dgl_node",
+            outputs="pyg_data",  # Changed from dgl_data
+            name="convert_to_pyg_node",  # Changed name
         ),
         node(
             func=generate_negative_samples_node,
-            inputs=["dgl_data", "params:evaluation.num_neg_samples"],
+            inputs=["pyg_data", "params:evaluation.num_neg_samples"],  # Changed from dgl_data
             outputs="negative_samples",
             name="generate_neg_samples_node",
         ),

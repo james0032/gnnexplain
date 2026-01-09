@@ -16,19 +16,21 @@ class ModelWrapper(nn.Module):
     predictions. Our CompGCN model has a different interface, so we wrap it.
     """
 
-    def __init__(self, kg_model, edge_index, edge_type, mode='link_prediction'):
+    def __init__(self, kg_model, edge_index, edge_type, mode='link_prediction', use_dgl=False):
         """
         Args:
             kg_model: The trained KG embedding model (CompGCN or RGCN)
             edge_index: Full graph edge index
             edge_type: Full graph edge types
             mode: 'link_prediction' or 'node_classification'
+            use_dgl: Whether using DGL model (if True, skip subset optimization)
         """
         super().__init__()
         self.kg_model = kg_model
         self.edge_index = edge_index
         self.edge_type = edge_type
         self.mode = mode
+        self.use_dgl = use_dgl
         # Store current subgraph node mapping (set before each explanation)
         self.current_subset = None
 
@@ -58,7 +60,9 @@ class ModelWrapper(nn.Module):
             # The edge_index and edge_type passed here define the COMPLETE subgraph
             # CompGCN's encode() will only do message passing on these edges
 
-            if self.current_subset is not None:
+            # Note: Subset optimization doesn't work well with DGL models due to
+            # hardcoded num_nodes in forward_with_edge_index
+            if self.current_subset is not None and not self.use_dgl:
                 # ALTERNATIVE APPROACH: Instead of swapping embeddings, just extract the subset
                 # and manually run the encoding on the subgraph
 
@@ -364,7 +368,8 @@ def prepare_model_for_explanation(
         kg_model=model,
         edge_index=edge_index,
         edge_type=edge_type,
-        mode='link_prediction'
+        mode='link_prediction',
+        use_dgl=use_dgl
     )
 
     print(f"✓ Model wrapped for explanation")

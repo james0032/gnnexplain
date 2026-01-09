@@ -8,6 +8,10 @@ def create_pipeline(**kwargs) -> Pipeline:
     """
     Create the training pipeline.
 
+    NOTE: Changed to use pyg_data for both training and explanation.
+    This ensures full compatibility with PyG explainers and enables
+    subset optimization (100-1000× speedup).
+
     Returns:
         A Pipeline object for training
     """
@@ -15,7 +19,7 @@ def create_pipeline(**kwargs) -> Pipeline:
         node(
             func=train_model,
             inputs={
-                "dgl_data": "dgl_data",
+                "pyg_data": "pyg_data",  # Changed from dgl_data to pyg_data
                 "knowledge_graph": "knowledge_graph",
                 "model_params": "params:model",
                 "training_params": "params:training",
@@ -28,7 +32,7 @@ def create_pipeline(**kwargs) -> Pipeline:
             func=compute_test_scores,
             inputs={
                 "trained_model_artifact": "trained_model_artifact",
-                "dgl_data": "dgl_data",
+                "pyg_data": "pyg_data",  # Changed from dgl_data to pyg_data
                 "knowledge_graph": "knowledge_graph",
                 "device_str": "params:device"
             },

@@ -56,97 +56,34 @@ class ModelWrapper(nn.Module):
                 # Fallback: assume relation 0
                 edge_type_for_encoding = torch.zeros(edge_index.size(1), dtype=torch.long, device=edge_index.device)
 
-            # OPTIMIZED VERSION: Direct subgraph encoding without embedding manipulation
-            # The edge_index and edge_type passed here define the COMPLETE subgraph
-            # CompGCN's encode() will only do message passing on these edges
+            # When using subgraph, always map relabeled indices back to original indices
+            # This avoids index out of bounds errors in the decoder
+            if self.current_subset is not None:
+                # Map relabeled indices (0 to len(subset)-1) back to original graph indices
+                edge_index_original = torch.stack([
+                    self.current_subset[edge_index[0]],
+                    self.current_subset[edge_index[1]]
+                ])
 
-            # Note: Subset optimization doesn't work well with DGL models due to
-            # hardcoded num_nodes in forward_with_edge_index
-            if self.current_subset is not None and not self.use_dgl:
-                # ALTERNATIVE APPROACH: Instead of swapping embeddings, just extract the subset
-                # and manually run the encoding on the subgraph
+                # Encode using the original indices with full graph
+                # CompGCN will use message passing on these edges
+                node_emb_full, rel_emb = self.kg_model.encode(edge_index_original, edge_type_for_encoding)
 
-                # Get the encoder reference
-                if hasattr(self.kg_model, 'encoder'):
-                    encoder = self.kg_model.encoder
-                else:
-                    encoder = self.kg_model
+                # Extract only the embeddings for nodes in the subset
+                node_emb_subset = node_emb_full[self.current_subset]
 
-                # Get initial embeddings for the subset of nodes
-                full_node_emb_param = encoder.node_emb
-                subset_initial_emb = full_node_emb_param[self.current_subset]
+                # For decoding, we use the relabeled subgraph indices
+                head_idx_subgraph = edge_index[0]
+                tail_idx_subgraph = edge_index[1]
 
-                # Since the edge_index is already relabeled to 0..len(subset)-1,
-                # we can't directly use encode() because it expects full graph indices.
-                # Instead, we'll manually do what encode does but with subset embeddings.
-
-                # For now, use a simpler approach: just use the full encode but only extract
-                # the embeddings we need afterward
-                node_emb_full, rel_emb = self.kg_model.encode(edge_index, edge_type_for_encoding)
-
-                # The edge_index is relabeled, so node_emb_full won't work correctly.
-                # We need to create embeddings for the subgraph specifically.
-                # Use the subset initial embeddings and then run message passing.
-
-                # Actually, the safest approach is to temporarily resize the parameter
-                # Save the original state
-                original_emb_data = full_node_emb_param.data
-                original_requires_grad = full_node_emb_param.requires_grad
-
-                try:
-                    # Replace parameter data temporarily (this is in-place, no setattr needed)
-                    with torch.no_grad():
-                        # Store original size
-                        original_size = full_node_emb_param.size()
-
-                        # Create new parameter with subset size
-                        subset_emb = subset_initial_emb.detach().clone()
-                        subset_param = torch.nn.Parameter(subset_emb, requires_grad=False)
-
-                        # Replace using module registration (safe way)
-                        if hasattr(self.kg_model, 'encoder'):
-                            self.kg_model.encoder.register_parameter('node_emb', subset_param)
-                        else:
-                            self.kg_model.register_parameter('node_emb', subset_param)
-
-                    # Encode with the subset embeddings
-                    node_emb_subset, rel_emb = self.kg_model.encode(edge_index, edge_type_for_encoding)
-
-                finally:
-                    # Restore original parameter
-                    with torch.no_grad():
-                        original_param = torch.nn.Parameter(original_emb_data, requires_grad=original_requires_grad)
-                        if hasattr(self.kg_model, 'encoder'):
-                            self.kg_model.encoder.register_parameter('node_emb', original_param)
-                        else:
-                            self.kg_model.register_parameter('node_emb', original_param)
+                # Decode using subset embeddings with relabeled indices
+                scores = self.kg_model.decode(node_emb_subset, rel_emb, head_idx_subgraph, tail_idx_subgraph, edge_type_for_encoding)
             else:
-                # No subset optimization (DGL or PyG without optimization)
-                # For DGL: We still need to map relabeled indices back to original indices
-                if self.use_dgl and self.current_subset is not None:
-                    # Map relabeled indices back to original indices
-                    # edge_index has relabeled indices (0 to len(subset)-1)
-                    # We need to map them back to full graph indices
-                    edge_index_remapped = torch.stack([
-                        self.current_subset[edge_index[0]],
-                        self.current_subset[edge_index[1]]
-                    ])
-
-                    # Encode using original indices with full graph
-                    node_emb_full, rel_emb = self.kg_model.encode(edge_index_remapped, edge_type_for_encoding)
-
-                    # Extract only the embeddings for nodes in the subset
-                    node_emb_subset = node_emb_full[self.current_subset]
-                else:
-                    # PyG or no subset mapping
-                    node_emb_subset, rel_emb = self.kg_model.encode(edge_index, edge_type_for_encoding)
-
-            # For decoding, we use the relabeled subgraph indices directly
-            head_idx_subgraph = edge_index[0]
-            tail_idx_subgraph = edge_index[1]
-
-            # Decode using subset embeddings with relabeled indices
-            scores = self.kg_model.decode(node_emb_subset, rel_emb, head_idx_subgraph, tail_idx_subgraph, edge_type_for_encoding)
+                # No subgraph extraction - use full graph (shouldn't happen in explanation)
+                node_emb, rel_emb = self.kg_model.encode(edge_index, edge_type_for_encoding)
+                head_idx = edge_index[0]
+                tail_idx = edge_index[1]
+                scores = self.kg_model.decode(node_emb, rel_emb, head_idx, tail_idx, edge_type_for_encoding)
 
             return scores
         else:

@@ -39,7 +39,7 @@ def create_pipeline(**kwargs) -> Pipeline:
             func=prepare_model_for_explanation,
             inputs={
                 "trained_model_dict": "trained_model",
-                "dgl_data": "dgl_data",
+                "pyg_data": "pyg_data",  # Changed from dgl_data to pyg_data
                 "device_str": "params:device"
             },
             outputs="prepared_model",
@@ -50,7 +50,7 @@ def create_pipeline(**kwargs) -> Pipeline:
         node(
             func=select_triples_to_explain,
             inputs={
-                "dgl_data": "dgl_data",
+                "pyg_data": "pyg_data",  # Changed from dgl_data to pyg_data
                 "knowledge_graph": "knowledge_graph",
                 "selection_params": "params:explanation.triple_selection",
                 "device_str": "params:device",
@@ -95,7 +95,7 @@ def create_pipeline(**kwargs) -> Pipeline:
                 inputs={
                     "model_dict": "prepared_model",
                     "selected_triples": "selected_triples",
-                    "pyg_data": "dgl_data",  # Function parameter is pyg_data but we pass dgl_data
+                    "pyg_data": "pyg_data",  # Changed to use pyg_data directly
                     "explainer_params": "params:explanation"
                 },
                 outputs="pg_explanations",
@@ -112,7 +112,7 @@ def create_pipeline(**kwargs) -> Pipeline:
                 inputs={
                     "model_dict": "prepared_model",
                     "selected_triples": "selected_triples",
-                    "pyg_data": "dgl_data",  # Function parameter is pyg_data but we pass dgl_data
+                    "pyg_data": "pyg_data",  # Changed to use pyg_data directly
                     "explainer_params": "params:explanation"
                 },
                 outputs="page_explanations",

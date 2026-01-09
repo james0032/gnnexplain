@@ -3,6 +3,9 @@
 #
 # These paths point to data files loaded by the data_preparation pipeline
 
+# Override device setting for server (use CUDA for GPU training)
+device: "cuda"
+
 data:
   train_file: "/projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/01_raw/robo_train.txt"
   val_file: "/projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_ROBOKOP_clean_baseline/data/01_raw/robo_val.txt"

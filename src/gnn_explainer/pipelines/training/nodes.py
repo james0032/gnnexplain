@@ -382,7 +382,10 @@ def compute_test_scores(
                 'kernel_size': model_config.get('conve_kernel_size', 3),
             }
 
-        model = CompGCNKGModel(
+        # Choose DGL or PyG model
+        ModelClass = CompGCNKGModelDGL if use_dgl else CompGCNKGModel
+
+        model = ModelClass(
             num_nodes=model_config['num_nodes'],
             num_relations=model_config['num_relations'],
             embedding_dim=model_config['embedding_dim'],
@@ -408,9 +411,18 @@ def compute_test_scores(
     model.eval()
 
     # Move graph data to device
-    edge_index = pyg_data['edge_index'].to(device)
-    edge_type = pyg_data['edge_type'].to(device)
-    test_triples = pyg_data['test_triples']
+    if use_dgl:
+        # DGL graph
+        g = graph_data['graph'].to(device)
+        edge_index = graph_data['edge_index'].to(device)
+        edge_type = graph_data['edge_type'].to(device)
+    else:
+        # PyG format
+        edge_index = graph_data['edge_index'].to(device)
+        edge_type = graph_data['edge_type'].to(device)
+        g = None
+
+    test_triples = graph_data['test_triples']
 
     print(f"\nScoring {len(test_triples)} test triples...")
 
@@ -422,12 +434,21 @@ def compute_test_scores(
         for batch_idx, i in enumerate(range(0, len(test_triples), batch_size), 1):
             batch_triples = test_triples[i:i+batch_size].to(device)
 
-            scores = model(
-                edge_index, edge_type,
-                batch_triples[:, 0],  # heads
-                batch_triples[:, 2],  # tails
-                batch_triples[:, 1]   # relations
-            )
+            # Forward pass (DGL or PyG)
+            if use_dgl:
+                scores = model(
+                    g=g,
+                    head_idx=batch_triples[:, 0],
+                    tail_idx=batch_triples[:, 2],
+                    rel_idx=batch_triples[:, 1]
+                )
+            else:
+                scores = model(
+                    edge_index, edge_type,
+                    batch_triples[:, 0],  # heads
+                    batch_triples[:, 2],  # tails
+                    batch_triples[:, 1]   # relations
+                )
 
             all_scores.extend(scores.cpu().tolist())
 

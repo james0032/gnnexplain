@@ -11,7 +11,7 @@ dependencies = [
     "kedro~=0.19.10",
     "kedro-datasets[pandas-csvdataset, pickle-pickledataset]>=3.0",
     "kedro-viz>=6.7.0",
-    "torch>=2.0.0",
+    "torch>=2.4.0,<2.5.0",
     "torchdata>=0.7.0,<0.8.0",
     # Note: Default DGL is CPU-only. For CUDA support, install with: pip install .[cuda]
     "dgl>=1.1.0",
@@ -45,12 +45,13 @@ pyg = [
     "torch-sparse>=0.6.0",
 ]
 cuda = [
-    # CUDA-enabled DGL for GPU acceleration
-    # Install with: pip install -e .[cuda]
-    # Requires NVIDIA GPU and appropriate CUDA toolkit installed
-    # Supported CUDA versions: 11.8, 12.1
+    # CUDA-enabled DGL cannot be installed directly from PyPI
+    # After installing the base package, run one of these commands:
+    #   CUDA 11.8: pip install dgl -f https://data.dgl.ai/wheels/cu118/repo.html
+    #   CUDA 12.1: pip install dgl -f https://data.dgl.ai/wheels/cu121/repo.html
+    # This will replace the CPU-only DGL with the CUDA version
+    # Requires NVIDIA GPU and matching CUDA toolkit installed
     # Visit https://www.dgl.ai/pages/start.html for more options
-    "dgl-cu118>=1.1.0; platform_system != 'Darwin'",
 ]
 
 [tool.setuptools.dynamic]

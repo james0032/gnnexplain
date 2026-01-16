@@ -67,22 +67,27 @@ class ModelWrapper(nn.Module):
 
                 # Extract initial embeddings for the subset nodes (before message passing)
                 # These are from the full graph's trained embedding table
-                full_node_emb = encoder.node_emb.weight  # [num_nodes_full, emb_dim]
+                # Handle both nn.Embedding (has .weight) and nn.Parameter (is the weight)
+                if isinstance(encoder.node_emb, nn.Embedding):
+                    full_node_emb = encoder.node_emb.weight  # [num_nodes_full, emb_dim]
+                    embedding_dim = encoder.node_emb.embedding_dim
+                    is_embedding = True
+                else:
+                    # nn.Parameter - the parameter itself is the embedding matrix
+                    full_node_emb = encoder.node_emb  # [num_nodes_full, emb_dim]
+                    embedding_dim = encoder.node_emb.shape[1]
+                    is_embedding = False
+
                 subset_node_emb_init = full_node_emb[self.current_subset]  # [len(subset), emb_dim]
 
-                # Temporarily replace the embedding table with subset embeddings
                 # Store original for restoration
-                original_emb_weight = encoder.node_emb.weight.data
-                original_num_embeddings = encoder.node_emb.num_embeddings
+                device = full_node_emb.device
+                original_node_emb = encoder.node_emb
 
-                # Create a new embedding with subset size
-                device = encoder.node_emb.weight.device
-                subset_embedding = torch.nn.Embedding(len(self.current_subset), encoder.node_emb.embedding_dim)
-                subset_embedding.weight.data = subset_node_emb_init.clone()
-                subset_embedding = subset_embedding.to(device)
-
-                # Temporarily replace the embedding
-                encoder.node_emb = subset_embedding
+                # Create a new parameter with subset size
+                # CompGCN encoder uses nn.Parameter, so we create nn.Parameter for consistency
+                subset_param = nn.Parameter(subset_node_emb_init.clone())
+                encoder.node_emb = subset_param
 
                 try:
                     # Now encode with RELABELED indices (0 to len(subset)-1)
@@ -96,11 +101,8 @@ class ModelWrapper(nn.Module):
                     scores = self.kg_model.decode(node_emb_subset, rel_emb, head_idx_subgraph, tail_idx_subgraph, edge_type_for_encoding)
 
                 finally:
-                    # Restore original embedding table
-                    original_embedding = torch.nn.Embedding(original_num_embeddings, encoder.node_emb.embedding_dim)
-                    original_embedding.weight.data = original_emb_weight
-                    original_embedding = original_embedding.to(device)
-                    encoder.node_emb = original_embedding
+                    # Restore original embedding/parameter
+                    encoder.node_emb = original_node_emb
 
             else:
                 # No subgraph extraction - use full graph (shouldn't happen in explanation)

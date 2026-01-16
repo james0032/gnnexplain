@@ -190,7 +190,10 @@ def train_model(
         print(f"\n  Found existing checkpoint at {checkpoint_path}")
         try:
             checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-            model.load_state_dict(checkpoint['model_state_dict'])
+            # Load current model state (for resuming training)
+            # Support both old format ('model_state_dict') and new format ('current_model_state_dict')
+            current_state = checkpoint.get('current_model_state_dict', checkpoint.get('model_state_dict'))
+            model.load_state_dict(current_state)
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             start_epoch = checkpoint['epoch'] + 1
             best_val_loss = checkpoint.get('best_val_loss', float('inf'))
@@ -344,7 +347,7 @@ def train_model(
         if (epoch + 1) % checkpoint_interval == 0:
             checkpoint = {
                 'epoch': epoch,
-                'model_state_dict': model.state_dict(),
+                'current_model_state_dict': model.state_dict(),  # Current state for resume
                 'optimizer_state_dict': optimizer.state_dict(),
                 'best_val_loss': best_val_loss,
                 'best_model_state': best_model_state,
@@ -356,7 +359,9 @@ def train_model(
                     'num_relations': knowledge_graph['num_relations'],
                     **model_params
                 },
-                'training_params': training_params
+                'training_params': training_params,
+                # Also save in trained_model_artifact format for direct use with compute_test_scores
+                'model_state_dict': best_model_state,  # Best model for inference
             }
             torch.save(checkpoint, checkpoint_path)
             print(f"  [Checkpoint saved at epoch {epoch+1}]", flush=True)

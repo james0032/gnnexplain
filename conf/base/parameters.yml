@@ -42,6 +42,8 @@ training:
   patience: 10
   weight_decay: 0.0
   gradient_clip: 1.0
+  checkpoint_interval: 2                  # Save checkpoint every N epochs
+  checkpoint_dir: "data/04_model_checkpoints"  # Directory for training checkpoints
 
 # Evaluation settings
 evaluation:
@@ -110,6 +112,7 @@ explanation:
     kl_weight: 0.2                        # Weight for KL divergence loss
     prediction_weight: 1.0                # Weight for prediction-aware training (NEW!)
     top_k_edges: 10                       # Number of top important edges to extract
+    checkpoint_interval: 10                # Save checkpoint every N epochs during PAGE training
 
   # Legacy explanation settings (for old explanation pipeline)
   num_explain: 20

@@ -1519,6 +1519,15 @@ def run_page_explainer(
 
     print(f"\n✓ Improved PAGE explainer initialized (with frozen CompGCN features)")
 
+    # Set up checkpoint path for training
+    from pathlib import Path
+    page_cache_dir = Path("data/06_explainer_cache")
+    page_cache_dir.mkdir(parents=True, exist_ok=True)
+    page_checkpoint_path = page_cache_dir / "page_training_checkpoint.pt"
+    checkpoint_interval = page_params.get('checkpoint_interval', 2)
+    print(f"  Checkpoint path: {page_checkpoint_path}")
+    print(f"  Checkpoint interval: every {checkpoint_interval} epochs")
+
     # Extract subgraphs for training
     selected_edge_index = selected_triples['selected_edge_index']
     selected_edge_type = selected_triples['selected_edge_type']
@@ -1620,7 +1629,9 @@ def run_page_explainer(
         lr=lr,
         kl_weight=page_params.get('kl_weight', 0.2),
         prediction_weight=prediction_weight,
-        verbose=True
+        verbose=True,
+        checkpoint_path=str(page_checkpoint_path),
+        checkpoint_interval=checkpoint_interval
     )
 
     print(f"✓ Improved PAGE training completed")

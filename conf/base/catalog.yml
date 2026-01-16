@@ -49,6 +49,20 @@ negative_samples:
   filepath: data/02_intermediate/negative_samples.pkl
 
 # =============================================================================
+# Model Checkpoints (04_model_checkpoints)
+# =============================================================================
+
+compgcn_training_checkpoint:
+  type: pickle.PickleDataset
+  filepath: data/04_model_checkpoints/compgcn_training_checkpoint.pt
+  backend: pickle
+
+page_training_checkpoint:
+  type: pickle.PickleDataset
+  filepath: data/06_explainer_cache/page_training_checkpoint.pt
+  backend: pickle
+
+# =============================================================================
 # Models (06_models)
 # =============================================================================
 

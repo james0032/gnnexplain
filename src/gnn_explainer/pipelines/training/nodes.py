@@ -161,7 +161,34 @@ def train_model(
     patience = training_params['patience']
     gradient_clip = training_params.get('gradient_clip', None)
 
-    for epoch in range(num_epochs):
+    # Checkpoint configuration
+    from pathlib import Path
+    checkpoint_interval = training_params.get('checkpoint_interval', 2)
+    checkpoint_dir = Path(training_params.get('checkpoint_dir', 'data/04_model_checkpoints'))
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = checkpoint_dir / 'compgcn_training_checkpoint.pt'
+    print(f"  Checkpoint directory: {checkpoint_dir}")
+    print(f"  Checkpoint interval: every {checkpoint_interval} epochs")
+
+    # Check for existing checkpoint to resume from
+    start_epoch = 0
+    if checkpoint_path.exists():
+        print(f"\n  Found existing checkpoint at {checkpoint_path}")
+        try:
+            checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            start_epoch = checkpoint['epoch'] + 1
+            best_val_loss = checkpoint.get('best_val_loss', float('inf'))
+            best_model_state = checkpoint.get('best_model_state', None)
+            patience_counter = checkpoint.get('patience_counter', 0)
+            print(f"  ✓ Resuming from epoch {start_epoch}/{num_epochs}")
+            print(f"  Best val_loss so far: {best_val_loss:.4f}")
+        except Exception as e:
+            print(f"  ⚠ Failed to load checkpoint: {e}")
+            print(f"  Starting from scratch...")
+
+    for epoch in range(start_epoch, num_epochs):
         # Train epoch
         model.train()
         total_loss = 0
@@ -298,6 +325,27 @@ def train_model(
             print(msg, flush=True)
         else:
             patience_counter += 1
+
+        # Save checkpoint every checkpoint_interval epochs
+        if (epoch + 1) % checkpoint_interval == 0:
+            checkpoint = {
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'best_val_loss': best_val_loss,
+                'best_model_state': best_model_state,
+                'patience_counter': patience_counter,
+                'train_loss': train_loss,
+                'val_loss': val_loss,
+                'model_config': {
+                    'num_nodes': knowledge_graph['num_nodes'],
+                    'num_relations': knowledge_graph['num_relations'],
+                    **model_params
+                },
+                'training_params': training_params
+            }
+            torch.save(checkpoint, checkpoint_path)
+            print(f"  [Checkpoint saved at epoch {epoch+1}]", flush=True)
 
         if patience_counter >= patience:
             print(f"\nEarly stopping triggered after {epoch+1} epochs")

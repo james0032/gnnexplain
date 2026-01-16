@@ -284,7 +284,9 @@ class ImprovedPAGEExplainer:
         lr=0.003,
         kl_weight=0.2,
         prediction_weight=1.0,
-        verbose=True
+        verbose=True,
+        checkpoint_path=None,
+        checkpoint_interval=2
     ):
         """
         Train VGAE on subgraphs with prediction-aware loss.
@@ -299,17 +301,32 @@ class ImprovedPAGEExplainer:
             kl_weight: KL divergence weight
             prediction_weight: Weight for prediction-awareness
             verbose: Print progress
+            checkpoint_path: Path to save checkpoints (if None, no checkpoints saved)
+            checkpoint_interval: Save checkpoint every N epochs (default: 2)
         """
         import time
 
         optimizer = torch.optim.Adam(self.vgae.parameters(), lr=lr)
+
+        # Check for existing checkpoint to resume from
+        start_epoch = 0
+        if checkpoint_path is not None:
+            from pathlib import Path
+            ckpt_file = Path(checkpoint_path)
+            if ckpt_file.exists():
+                print(f"  Loading checkpoint from {checkpoint_path}...", flush=True)
+                checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
+                self.vgae.load_state_dict(checkpoint['vgae_state_dict'])
+                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                start_epoch = checkpoint['epoch'] + 1
+                print(f"  Resuming from epoch {start_epoch}/{epochs}", flush=True)
 
         self.vgae.train()
 
         start_time = time.time()
         print_interval = max(1, epochs // 20)  # Print ~20 times during training
 
-        for epoch in range(epochs):
+        for epoch in range(start_epoch, epochs):
             epoch_start = time.time()
             total_loss = 0
             total_recon = 0
@@ -346,7 +363,26 @@ class ImprovedPAGEExplainer:
                 total_kl += kl_div.item()
                 total_weighted_recon += weighted_recon.item()
 
-            if verbose and ((epoch + 1) % print_interval == 0 or epoch == 0 or epoch == epochs - 1):
+            # Save checkpoint every checkpoint_interval epochs
+            if checkpoint_path is not None and (epoch + 1) % checkpoint_interval == 0:
+                avg_loss = total_loss / len(subgraphs_data)
+                checkpoint = {
+                    'epoch': epoch,
+                    'vgae_state_dict': self.vgae.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'loss': avg_loss,
+                    'training_config': {
+                        'epochs': epochs,
+                        'lr': lr,
+                        'kl_weight': kl_weight,
+                        'prediction_weight': prediction_weight
+                    }
+                }
+                torch.save(checkpoint, checkpoint_path)
+                if verbose:
+                    print(f"  [Checkpoint saved at epoch {epoch+1}]", flush=True)
+
+            if verbose and ((epoch + 1) % print_interval == 0 or epoch == start_epoch or epoch == epochs - 1):
                 avg_loss = total_loss / len(subgraphs_data)
                 avg_recon = total_recon / len(subgraphs_data)
                 avg_weighted_recon = total_weighted_recon / len(subgraphs_data)

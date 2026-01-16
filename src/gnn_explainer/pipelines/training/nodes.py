@@ -163,24 +163,37 @@ def train_model(
 
     # Checkpoint configuration
     from pathlib import Path
+    import os
 
-    # Get project root directory for proper path resolution
-    # nodes.py is at: src/gnn_explainer/pipelines/training/nodes.py
-    # project root is 4 levels up
-    project_root = Path(__file__).resolve().parents[4]
+    # Check for DATA_DIR environment variable first, then fall back to project root
+    # DATA_DIR allows specifying an external data directory (e.g., on server)
+    data_dir_env = os.environ.get('DATA_DIR')
+    if data_dir_env:
+        base_dir = Path(data_dir_env)
+        print(f"  Using DATA_DIR from environment: {base_dir}")
+    else:
+        # Fall back to project root for local development
+        # nodes.py is at: src/gnn_explainer/pipelines/training/nodes.py
+        # project root is 4 levels up
+        base_dir = Path(__file__).resolve().parents[4]
+        print(f"  Using project root (DATA_DIR not set): {base_dir}")
 
     checkpoint_interval = training_params.get('checkpoint_interval', 2)
     checkpoint_dir_config = training_params.get('checkpoint_dir', 'data/04_model_checkpoints')
 
-    # Make path absolute if it's relative
-    if not Path(checkpoint_dir_config).is_absolute():
-        checkpoint_dir = project_root / checkpoint_dir_config
-    else:
+    # Resolve checkpoint directory path
+    # If checkpoint_dir_config is absolute, use it directly
+    # If relative and starts with "data/", strip "data/" prefix when DATA_DIR is set
+    if Path(checkpoint_dir_config).is_absolute():
         checkpoint_dir = Path(checkpoint_dir_config)
+    elif data_dir_env and checkpoint_dir_config.startswith('data/'):
+        # Strip "data/" prefix since DATA_DIR already points to data folder
+        checkpoint_dir = base_dir / checkpoint_dir_config[5:]  # Remove "data/" prefix
+    else:
+        checkpoint_dir = base_dir / checkpoint_dir_config
 
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_path = checkpoint_dir / 'compgcn_training_checkpoint.pt'
-    print(f"  Project root: {project_root}")
     print(f"  Checkpoint directory: {checkpoint_dir}")
     print(f"  Checkpoint interval: every {checkpoint_interval} epochs")
 

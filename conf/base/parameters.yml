@@ -44,7 +44,7 @@ model:
 # Training configuration
 training:
   learning_rate: 0.001
-  batch_size: 32
+  batch_size: 131072
   num_epochs: 5
   patience: 10
   weight_decay: 0.0

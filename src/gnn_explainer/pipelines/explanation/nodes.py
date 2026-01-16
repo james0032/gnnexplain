@@ -1071,7 +1071,12 @@ def run_pgexplainer(
     import os
     from pathlib import Path
 
-    explainer_cache_dir = Path("data/06_explainer_cache")
+    # Get project root directory for proper path resolution
+    # nodes.py is at: src/gnn_explainer/pipelines/explanation/nodes.py
+    # project root is 4 levels up
+    project_root = Path(__file__).resolve().parents[4]
+
+    explainer_cache_dir = project_root / "data/06_explainer_cache"
     explainer_cache_dir.mkdir(parents=True, exist_ok=True)
     explainer_cache_path = explainer_cache_dir / "pgexplainer_trained.pt"
 
@@ -1521,10 +1526,17 @@ def run_page_explainer(
 
     # Set up checkpoint path for training
     from pathlib import Path
-    page_cache_dir = Path("data/06_explainer_cache")
+
+    # Get project root directory for proper path resolution
+    # nodes.py is at: src/gnn_explainer/pipelines/explanation/nodes.py
+    # project root is 4 levels up
+    project_root = Path(__file__).resolve().parents[4]
+
+    page_cache_dir = project_root / "data/06_explainer_cache"
     page_cache_dir.mkdir(parents=True, exist_ok=True)
     page_checkpoint_path = page_cache_dir / "page_training_checkpoint.pt"
     checkpoint_interval = page_params.get('checkpoint_interval', 2)
+    print(f"  Project root: {project_root}")
     print(f"  Checkpoint path: {page_checkpoint_path}")
     print(f"  Checkpoint interval: every {checkpoint_interval} epochs")
 

@@ -163,10 +163,24 @@ def train_model(
 
     # Checkpoint configuration
     from pathlib import Path
+
+    # Get project root directory for proper path resolution
+    # nodes.py is at: src/gnn_explainer/pipelines/training/nodes.py
+    # project root is 4 levels up
+    project_root = Path(__file__).resolve().parents[4]
+
     checkpoint_interval = training_params.get('checkpoint_interval', 2)
-    checkpoint_dir = Path(training_params.get('checkpoint_dir', 'data/04_model_checkpoints'))
+    checkpoint_dir_config = training_params.get('checkpoint_dir', 'data/04_model_checkpoints')
+
+    # Make path absolute if it's relative
+    if not Path(checkpoint_dir_config).is_absolute():
+        checkpoint_dir = project_root / checkpoint_dir_config
+    else:
+        checkpoint_dir = Path(checkpoint_dir_config)
+
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_path = checkpoint_dir / 'compgcn_training_checkpoint.pt'
+    print(f"  Project root: {project_root}")
     print(f"  Checkpoint directory: {checkpoint_dir}")
     print(f"  Checkpoint interval: every {checkpoint_interval} epochs")
 

@@ -1,10 +1,42 @@
 """Nodes for data preparation pipeline."""
 
+import os
 import torch
 import dgl
 import pandas as pd
+from pathlib import Path
 from typing import Dict, Tuple
 from ..utils import generate_negative_samples
+
+
+def resolve_data_path(path: str) -> str:
+    """
+    Resolve a data path using DATA_DIR environment variable if set.
+
+    If DATA_DIR is set and path starts with "data/", the "data/" prefix is stripped
+    and the path is resolved relative to DATA_DIR.
+
+    Args:
+        path: Original path from parameters.yml (e.g., "data/01_raw/node_dict")
+
+    Returns:
+        Resolved absolute path
+    """
+    data_dir_env = os.environ.get('DATA_DIR')
+
+    if data_dir_env and path.startswith('data/'):
+        # Strip "data/" prefix since DATA_DIR already points to data folder
+        resolved = Path(data_dir_env) / path[5:]  # Remove "data/" prefix
+    elif Path(path).is_absolute():
+        resolved = Path(path)
+    else:
+        # Fall back to project root for local development
+        # This file is at: src/gnn_explainer/pipelines/data_preparation/nodes.py
+        # project root is 5 levels up
+        project_root = Path(__file__).resolve().parents[5]
+        resolved = project_root / path
+
+    return str(resolved)
 
 
 def load_triple_files(
@@ -23,15 +55,24 @@ def load_triple_files(
     Returns:
         Dictionary containing triple data
     """
+    # Resolve paths using DATA_DIR if set
+    train_path = resolve_data_path(train_file_path)
+    val_path = resolve_data_path(val_file_path)
+    test_path = resolve_data_path(test_file_path)
+
+    data_dir_env = os.environ.get('DATA_DIR')
+    if data_dir_env:
+        print(f"Using DATA_DIR: {data_dir_env}")
+
     print(f"Loading triple files...")
-    print(f"  Train: {train_file_path}")
-    print(f"  Val: {val_file_path}")
-    print(f"  Test: {test_file_path}")
+    print(f"  Train: {train_path}")
+    print(f"  Val: {val_path}")
+    print(f"  Test: {test_path}")
 
     return {
-        'train_file': train_file_path,
-        'val_file': val_file_path,
-        'test_file': test_file_path
+        'train_file': train_path,
+        'val_file': val_path,
+        'test_file': test_path
     }
 
 
@@ -49,13 +90,17 @@ def load_dictionaries(
     Returns:
         Dictionary containing node_dict and rel_dict
     """
+    # Resolve paths using DATA_DIR if set
+    node_path = resolve_data_path(node_dict_path)
+    rel_path = resolve_data_path(rel_dict_path)
+
     print(f"\nLoading dictionaries...")
-    print(f"  Node dict: {node_dict_path}")
-    print(f"  Rel dict: {rel_dict_path}")
+    print(f"  Node dict: {node_path}")
+    print(f"  Rel dict: {rel_path}")
 
     # Load node dictionary
     node_dict = {}
-    with open(node_dict_path, 'r') as f:
+    with open(node_path, 'r') as f:
         for line in f:
             parts = line.strip().split('\t')
             if len(parts) == 2:
@@ -63,7 +108,7 @@ def load_dictionaries(
 
     # Load relation dictionary
     rel_dict = {}
-    with open(rel_dict_path, 'r') as f:
+    with open(rel_path, 'r') as f:
         for line in f:
             parts = line.strip().split('\t')
             if len(parts) == 2:

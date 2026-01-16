@@ -129,9 +129,11 @@ class VGAE(nn.Module):
         self.latent_dim = latent_dim
 
     def reparameterize(self, mu, logvar):
-        """Reparameterization trick for VAE."""
+        """Reparameterization trick for VAE with numerical stability."""
         if self.training:
-            std = torch.exp(0.5 * logvar)
+            # Clamp logvar to prevent exp() overflow
+            logvar_clamped = torch.clamp(logvar, min=-20, max=10)
+            std = torch.exp(0.5 * logvar_clamped)
             eps = torch.randn_like(std)
             return mu + eps * std
         else:
@@ -183,8 +185,9 @@ def vgae_loss(adj_reconstructed, adj_true, mu, logvar, kl_weight=0.2):
     # Reconstruction loss (binary cross-entropy)
     recon_loss = F.binary_cross_entropy(adj_reconstructed_safe, adj_true_safe, reduction='mean')
 
-    # KL divergence
-    kl_div = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+    # KL divergence with numerical stability
+    logvar_clamped = torch.clamp(logvar, min=-20, max=10)
+    kl_div = -0.5 * torch.mean(1 + logvar_clamped - mu.pow(2) - logvar_clamped.exp())
 
     # Total loss
     total_loss = recon_loss + kl_weight * kl_div

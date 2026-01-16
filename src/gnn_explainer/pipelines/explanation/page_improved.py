@@ -110,9 +110,11 @@ class IntegratedVGAE(nn.Module):
         return mu, logvar
 
     def reparameterize(self, mu, logvar):
-        """Reparameterization trick."""
+        """Reparameterization trick with numerical stability."""
         if self.training:
-            std = torch.exp(0.5 * logvar)
+            # Clamp logvar to prevent exp() overflow (exp(10) ~ 22000, exp(20) ~ 5e8)
+            logvar_clamped = torch.clamp(logvar, min=-20, max=10)
+            std = torch.exp(0.5 * logvar_clamped)
             eps = torch.randn_like(std)
             return mu + eps * std
         else:
@@ -192,8 +194,10 @@ def prediction_aware_vgae_loss(
     # Standard reconstruction loss (BCE)
     recon_loss = F.binary_cross_entropy(adj_reconstructed_safe, adj_true_safe, reduction='mean')
 
-    # KL divergence
-    kl_div = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+    # KL divergence with numerical stability
+    # Clamp logvar to prevent exp() overflow
+    logvar_clamped = torch.clamp(logvar, min=-20, max=10)
+    kl_div = -0.5 * torch.mean(1 + logvar_clamped - mu.pow(2) - logvar_clamped.exp())
 
     # Prediction-aware weighting
     # Higher scores -> more weight on reconstruction

@@ -365,6 +365,7 @@ class ImprovedPAGEExplainer:
 
             # Save checkpoint every checkpoint_interval epochs
             if checkpoint_path is not None and (epoch + 1) % checkpoint_interval == 0:
+                from pathlib import Path
                 avg_loss = total_loss / len(subgraphs_data)
                 checkpoint = {
                     'epoch': epoch,
@@ -378,9 +379,14 @@ class ImprovedPAGEExplainer:
                         'prediction_weight': prediction_weight
                     }
                 }
+                # Save versioned checkpoint (by epoch number)
+                checkpoint_dir = Path(checkpoint_path).parent
+                versioned_path = checkpoint_dir / f'page_checkpoint_epoch_{epoch+1:04d}.pt'
+                torch.save(checkpoint, versioned_path)
+                # Also save as 'latest' for easy resume
                 torch.save(checkpoint, checkpoint_path)
                 if verbose:
-                    print(f"  [Checkpoint saved at epoch {epoch+1}]", flush=True)
+                    print(f"  [Checkpoint saved: {versioned_path.name} and {Path(checkpoint_path).name}]", flush=True)
 
             if verbose and ((epoch + 1) % print_interval == 0 or epoch == start_epoch or epoch == epochs - 1):
                 avg_loss = total_loss / len(subgraphs_data)

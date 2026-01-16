@@ -13,6 +13,15 @@ data:
   node_dict: "/projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_clean_baseline/data/01_raw/node_dict"
   rel_dict: "/projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_clean_baseline/data/01_raw/rel_dict"
 
+# Training checkpoint directory (absolute path to external data folder)
+training:
+  checkpoint_dir: "/projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_clean_baseline/data/04_model_checkpoints"
+
+# Explanation checkpoint directory
+explanation:
+  page:
+    checkpoint_dir: "/projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_clean_baseline/data/06_explainer_cache"
+
 # Visualization output directory
 visualization:
   explanation_dir: "/projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_clean_baseline/data/08_reporting/explanations"

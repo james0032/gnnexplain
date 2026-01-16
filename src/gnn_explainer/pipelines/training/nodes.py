@@ -363,8 +363,12 @@ def train_model(
                 # Also save in trained_model_artifact format for direct use with compute_test_scores
                 'model_state_dict': best_model_state,  # Best model for inference
             }
+            # Save versioned checkpoint (by epoch number)
+            versioned_checkpoint_path = checkpoint_dir / f'compgcn_checkpoint_epoch_{epoch+1:04d}.pt'
+            torch.save(checkpoint, versioned_checkpoint_path)
+            # Also save as 'latest' for easy resume
             torch.save(checkpoint, checkpoint_path)
-            print(f"  [Checkpoint saved at epoch {epoch+1}]", flush=True)
+            print(f"  [Checkpoint saved: {versioned_checkpoint_path.name} and {checkpoint_path.name}]", flush=True)
 
         if patience_counter >= patience:
             print(f"\nEarly stopping triggered after {epoch+1} epochs")

@@ -1527,17 +1527,22 @@ def run_page_explainer(
     # Set up checkpoint path for training
     from pathlib import Path
 
-    # Get project root directory for proper path resolution
+    # Get project root directory for proper path resolution (fallback for relative paths)
     # nodes.py is at: src/gnn_explainer/pipelines/explanation/nodes.py
     # project root is 4 levels up
     project_root = Path(__file__).resolve().parents[4]
 
-    page_cache_dir = project_root / "data/06_explainer_cache"
+    # Get checkpoint directory from config (supports absolute paths from conf/local)
+    checkpoint_dir_config = page_params.get('checkpoint_dir', 'data/06_explainer_cache')
+    if not Path(checkpoint_dir_config).is_absolute():
+        page_cache_dir = project_root / checkpoint_dir_config
+    else:
+        page_cache_dir = Path(checkpoint_dir_config)
+
     page_cache_dir.mkdir(parents=True, exist_ok=True)
     page_checkpoint_path = page_cache_dir / "page_training_checkpoint.pt"
     checkpoint_interval = page_params.get('checkpoint_interval', 2)
-    print(f"  Project root: {project_root}")
-    print(f"  Checkpoint path: {page_checkpoint_path}")
+    print(f"  Checkpoint directory: {page_cache_dir}")
     print(f"  Checkpoint interval: every {checkpoint_interval} epochs")
 
     # Extract subgraphs for training

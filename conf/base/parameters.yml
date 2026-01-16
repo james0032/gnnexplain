@@ -5,15 +5,17 @@
 # Base data directory - set via environment variable DATA_DIR
 # Default: "data" (relative to project root)
 # For server: export DATA_DIR="/projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_clean_baseline/data"
-_data_dir: ${oc.env:DATA_DIR,data}
+#
+# NOTE: Since Kedro doesn't register oc.env by default, we handle DATA_DIR in the code.
+# The paths below use "data" as default; if DATA_DIR is set, the code will use it.
 
-# Data paths (using base data directory)
+# Data paths (relative paths - code will prepend DATA_DIR if set)
 data:
-  train_file: "${_data_dir}/01_raw/robo_train.txt"
-  val_file: "${_data_dir}/01_raw/robo_val.txt"
-  test_file: "${_data_dir}/01_raw/robo_test.txt"
-  node_dict: "${_data_dir}/01_raw/node_dict"
-  rel_dict: "${_data_dir}/01_raw/rel_dict"
+  train_file: "data/01_raw/robo_train.txt"
+  val_file: "data/01_raw/robo_val.txt"
+  test_file: "data/01_raw/robo_test.txt"
+  node_dict: "data/01_raw/node_dict"
+  rel_dict: "data/01_raw/rel_dict"
 
 # Model architecture hyperparameters
 model:
@@ -48,7 +50,7 @@ training:
   weight_decay: 0.0
   gradient_clip: 1.0
   checkpoint_interval: 2                  # Save checkpoint every N epochs
-  checkpoint_dir: "${_data_dir}/04_model_checkpoints"  # Directory for training checkpoints
+  checkpoint_dir: "data/04_model_checkpoints"  # Directory for training checkpoints (or use DATA_DIR env var)
 
 # Evaluation settings
 evaluation:
@@ -75,7 +77,7 @@ explanation:
                                           # - "specific_nodes": select triples involving specific nodes
     num_triples: 10                       # Number of triples to explain (ignored for "from_file")
     catalog_name: "top10_test"            # Kedro catalog dataset name (preferred method)
-    file_path: "${_data_dir}/07_model_output/top10_test.txt"  # Fallback file path for "from_file" strategy
+    file_path: "data/07_model_output/top10_test.txt"  # Fallback file path for "from_file" strategy
     target_relations: [0, 1]              # For "specific_relations" strategy
     target_nodes: []                      # For "specific_nodes" strategy
 
@@ -118,7 +120,7 @@ explanation:
     prediction_weight: 1.0                # Weight for prediction-aware training (NEW!)
     top_k_edges: 10                       # Number of top important edges to extract
     checkpoint_interval: 10               # Save checkpoint every N epochs during PAGE training
-    checkpoint_dir: "${_data_dir}/06_explainer_cache"  # Directory for PAGE checkpoints
+    checkpoint_dir: "data/06_explainer_cache"  # Directory for PAGE checkpoints
 
   # Legacy explanation settings (for old explanation pipeline)
   num_explain: 20
@@ -132,7 +134,7 @@ explanation:
 
 # Visualization settings
 visualization:
-  explanation_dir: "${_data_dir}/08_reporting/explanations"
+  explanation_dir: "data/08_reporting/explanations"
   top_k_edges: 20
   figure_size: [15, 10]
   dpi: 300

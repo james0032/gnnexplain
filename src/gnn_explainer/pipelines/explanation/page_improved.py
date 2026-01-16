@@ -300,11 +300,17 @@ class ImprovedPAGEExplainer:
             prediction_weight: Weight for prediction-awareness
             verbose: Print progress
         """
+        import time
+
         optimizer = torch.optim.Adam(self.vgae.parameters(), lr=lr)
 
         self.vgae.train()
 
+        start_time = time.time()
+        print_interval = max(1, epochs // 20)  # Print ~20 times during training
+
         for epoch in range(epochs):
+            epoch_start = time.time()
             total_loss = 0
             total_recon = 0
             total_kl = 0
@@ -340,17 +346,26 @@ class ImprovedPAGEExplainer:
                 total_kl += kl_div.item()
                 total_weighted_recon += weighted_recon.item()
 
-            if verbose and (epoch + 1) % 10 == 0:
+            if verbose and ((epoch + 1) % print_interval == 0 or epoch == 0 or epoch == epochs - 1):
                 avg_loss = total_loss / len(subgraphs_data)
                 avg_recon = total_recon / len(subgraphs_data)
                 avg_weighted_recon = total_weighted_recon / len(subgraphs_data)
                 avg_kl = total_kl / len(subgraphs_data)
 
-                print(f"  Epoch [{epoch+1}/{epochs}]: "
+                elapsed = time.time() - start_time
+                epoch_time = time.time() - epoch_start
+                remaining_epochs = epochs - (epoch + 1)
+                eta_seconds = epoch_time * remaining_epochs
+                eta_mins = int(eta_seconds / 60)
+                eta_secs = int(eta_seconds % 60)
+
+                progress_pct = 100 * (epoch + 1) / epochs
+
+                print(f"  Epoch [{epoch+1:4d}/{epochs}] ({progress_pct:5.1f}%): "
                       f"Loss={avg_loss:.4f}, "
                       f"Recon={avg_recon:.4f}, "
-                      f"WeightedRecon={avg_weighted_recon:.4f}, "
-                      f"KL={avg_kl:.4f}", flush=True)
+                      f"KL={avg_kl:.4f} "
+                      f"| ETA: {eta_mins}m {eta_secs}s", flush=True)
 
     def explain(self, x, adj):
         """

@@ -1526,13 +1526,29 @@ def run_page_explainer(
 
     print(f"\nExtracting subgraphs with CompGCN features for {len(triples_readable)} triples...")
 
+    import time as time_module
+    extract_start_time = time_module.time()
+
     subgraphs_data = []
     subgraph_info = []
 
-    for i in range(len(triples_readable)):
+    total_triples = len(triples_readable)
+    for i in range(total_triples):
         head_idx = selected_edge_index[0, i].item()
         tail_idx = selected_edge_index[1, i].item()
         rel_idx = selected_edge_type[i].item()
+
+        # Show progress every 10% or at least every 10 triples
+        progress_interval = max(1, total_triples // 10)
+        if i % progress_interval == 0 or i == total_triples - 1:
+            elapsed = time_module.time() - extract_start_time
+            if i > 0:
+                eta_seconds = (elapsed / i) * (total_triples - i)
+                eta_mins = int(eta_seconds / 60)
+                eta_secs = int(eta_seconds % 60)
+                print(f"  Extracting subgraph [{i+1}/{total_triples}] ({100*(i+1)/total_triples:.0f}%) | ETA: {eta_mins}m {eta_secs}s", flush=True)
+            else:
+                print(f"  Extracting subgraph [{i+1}/{total_triples}] ({100*(i+1)/total_triples:.0f}%)", flush=True)
 
         try:
             # Extract subgraph around head and tail
@@ -1577,7 +1593,8 @@ def run_page_explainer(
         except Exception as e:
             print(f"  Warning: Failed to extract subgraph for triple {i}: {e}")
 
-    print(f"✓ Extracted {len(subgraphs_data)} subgraphs with CompGCN features")
+    extract_time = time_module.time() - extract_start_time
+    print(f"✓ Extracted {len(subgraphs_data)} subgraphs with CompGCN features in {extract_time:.1f}s")
 
     # Show prediction score statistics
     if subgraphs_data:

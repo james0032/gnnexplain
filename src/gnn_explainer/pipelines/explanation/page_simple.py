@@ -175,8 +175,13 @@ def vgae_loss(adj_reconstructed, adj_true, mu, logvar, kl_weight=0.2):
     Returns:
         Total loss, reconstruction loss, KL divergence
     """
+    # Clamp values to valid range for BCE to avoid CUDA assertion errors
+    eps = 1e-7
+    adj_reconstructed_safe = torch.clamp(adj_reconstructed, eps, 1 - eps)
+    adj_true_safe = torch.clamp(adj_true, 0.0, 1.0)
+
     # Reconstruction loss (binary cross-entropy)
-    recon_loss = F.binary_cross_entropy(adj_reconstructed, adj_true, reduction='mean')
+    recon_loss = F.binary_cross_entropy(adj_reconstructed_safe, adj_true_safe, reduction='mean')
 
     # KL divergence
     kl_div = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())

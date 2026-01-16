@@ -358,6 +358,22 @@ def train_model(
 
         # Save checkpoint every checkpoint_interval epochs
         if (epoch + 1) % checkpoint_interval == 0:
+            # Build model_config compatible with both compute_test_scores and explanation pipeline
+            model_config_for_checkpoint = {
+                'num_nodes': knowledge_graph['num_nodes'],
+                'num_relations': knowledge_graph['num_relations'],
+                **model_params
+            }
+            # Add conve_kwargs for explanation pipeline compatibility
+            if model_params.get('decoder_type') == 'conve':
+                model_config_for_checkpoint['conve_kwargs'] = {
+                    'input_drop': model_params.get('conve_input_drop', 0.2),
+                    'hidden_drop': model_params.get('conve_hidden_drop', 0.3),
+                    'feature_drop': model_params.get('conve_feature_drop', 0.2),
+                    'num_filters': model_params.get('conve_num_filters', 32),
+                    'kernel_size': model_params.get('conve_kernel_size', 3),
+                }
+
             checkpoint = {
                 'epoch': epoch,
                 'current_model_state_dict': model.state_dict(),  # Current state for resume
@@ -367,11 +383,7 @@ def train_model(
                 'patience_counter': patience_counter,
                 'train_loss': train_loss,
                 'val_loss': val_loss,
-                'model_config': {
-                    'num_nodes': knowledge_graph['num_nodes'],
-                    'num_relations': knowledge_graph['num_relations'],
-                    **model_params
-                },
+                'model_config': model_config_for_checkpoint,
                 'training_params': training_params,
                 # Also save in trained_model_artifact format for direct use with compute_test_scores
                 'model_state_dict': best_model_state,  # Best model for inference
@@ -393,13 +405,25 @@ def train_model(
     print(f"Best validation loss: {best_val_loss:.4f}")
     print(f"Total epochs trained: {epoch+1}")
 
+    # Build model_config compatible with both compute_test_scores and explanation pipeline
+    final_model_config = {
+        'num_nodes': knowledge_graph['num_nodes'],
+        'num_relations': knowledge_graph['num_relations'],
+        **model_params
+    }
+    # Add conve_kwargs for explanation pipeline compatibility
+    if model_params.get('decoder_type') == 'conve':
+        final_model_config['conve_kwargs'] = {
+            'input_drop': model_params.get('conve_input_drop', 0.2),
+            'hidden_drop': model_params.get('conve_hidden_drop', 0.3),
+            'feature_drop': model_params.get('conve_feature_drop', 0.2),
+            'num_filters': model_params.get('conve_num_filters', 32),
+            'kernel_size': model_params.get('conve_kernel_size', 3),
+        }
+
     return {
         'model_state_dict': best_model_state,
-        'model_config': {
-            'num_nodes': knowledge_graph['num_nodes'],
-            'num_relations': knowledge_graph['num_relations'],
-            **model_params
-        },
+        'model_config': final_model_config,
         'training_info': {
             'final_val_loss': best_val_loss,
             'num_epochs_trained': epoch + 1,

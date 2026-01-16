@@ -34,7 +34,8 @@ def create_pipeline(**kwargs) -> Pipeline:
                 "trained_model_artifact": "trained_model_artifact",
                 "pyg_data": "pyg_data",  # Changed from dgl_data to pyg_data
                 "knowledge_graph": "knowledge_graph",
-                "device_str": "params:device"
+                "device_str": "params:device",
+                "batch_size": "params:evaluation.scoring_batch_size"
             },
             outputs=["test_triple_scores", "test_triple_scores_csv", "top10_test"],
             name="compute_test_scores",

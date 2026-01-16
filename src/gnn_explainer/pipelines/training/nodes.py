@@ -4,6 +4,7 @@ import logging
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
+import numpy as np
 import dgl
 from typing import Dict
 from .model import RGCNDistMultModel
@@ -531,16 +532,23 @@ def compute_test_scores(
         g = None
 
     test_triples = graph_data['test_triples']
+    num_triples = len(test_triples)
 
-    print(f"\nScoring {len(test_triples)} test triples...")
+    print(f"\nScoring {num_triples:,} test triples...")
+    print(f"  Batch size: {batch_size:,}")
 
-    # Compute scores
-    all_scores = []
-    num_batches = (len(test_triples) + batch_size - 1) // batch_size
+    # Pre-allocate tensor for efficiency (important for 30M+ rows)
+    all_scores_tensor = torch.zeros(num_triples, dtype=torch.float32)
+    num_batches = (num_triples + batch_size - 1) // batch_size
+
+    # Progress reporting interval - adaptive based on number of batches
+    # For 30M rows with batch_size=8192: ~3,662 batches -> report every ~366 batches (10 reports)
+    progress_interval = max(1, num_batches // 10)
 
     with torch.no_grad():
-        for batch_idx, i in enumerate(range(0, len(test_triples), batch_size), 1):
-            batch_triples = test_triples[i:i+batch_size].to(device)
+        for batch_idx, i in enumerate(range(0, num_triples, batch_size), 1):
+            batch_end = min(i + batch_size, num_triples)
+            batch_triples = test_triples[i:batch_end].to(device)
 
             # Forward pass (DGL or PyG)
             if use_dgl:
@@ -558,18 +566,19 @@ def compute_test_scores(
                     batch_triples[:, 1]   # relations
                 )
 
-            all_scores.extend(scores.cpu().tolist())
+            # Store directly in pre-allocated tensor (avoids list append overhead)
+            all_scores_tensor[i:batch_end] = scores.cpu()
 
-            # Print progress every 10 batches
-            if batch_idx % 10 == 0 or batch_idx == num_batches:
-                print(f"  Processed {batch_idx}/{num_batches} batches", flush=True)
+            # Print progress at adaptive intervals (roughly 10 progress reports)
+            if batch_idx % progress_interval == 0 or batch_idx == num_batches:
+                pct = 100.0 * batch_idx / num_batches
+                print(f"  Processed {batch_idx:,}/{num_batches:,} batches ({pct:.1f}%)", flush=True)
 
-    # Convert to tensor and apply sigmoid
-    all_scores_tensor = torch.tensor(all_scores)
+    # Apply sigmoid
     sigmoid_scores = torch.sigmoid(all_scores_tensor)
 
     print(f"\n✓ Scoring complete")
-    print(f"  Total triples scored: {len(all_scores)}")
+    print(f"  Total triples scored: {num_triples:,}")
     print(f"  Raw score range: [{all_scores_tensor.min():.4f}, {all_scores_tensor.max():.4f}]")
     print(f"  Sigmoid score range: [{sigmoid_scores.min():.4f}, {sigmoid_scores.max():.4f}]")
     print(f"  Mean sigmoid score: {sigmoid_scores.mean():.4f}")
@@ -599,23 +608,30 @@ def compute_test_scores(
         print(f"  idx_to_entity: {len(idx_to_entity)} entities")
         print(f"  idx_to_relation: {len(idx_to_relation)} relations")
 
-    # Create lists for entity and relation names
-    head_ids = []
-    head_names = []
-    relation_names = []
-    tail_ids = []
-    tail_names = []
+    # Vectorized DataFrame creation (much faster for 30M+ rows)
+    print(f"\nCreating DataFrame (vectorized for {num_triples:,} rows)...")
 
-    for i in range(len(test_triples)):
-        head_idx = test_triples[i, 0].item()
-        rel_idx = test_triples[i, 1].item()
-        tail_idx = test_triples[i, 2].item()
+    # Extract indices as numpy arrays (fast)
+    head_ids = test_triples[:, 0].numpy()
+    rel_ids = test_triples[:, 1].numpy()
+    tail_ids = test_triples[:, 2].numpy()
 
-        head_ids.append(head_idx)
-        tail_ids.append(tail_idx)
-        head_names.append(idx_to_entity.get(head_idx, f"node_{head_idx}"))
-        tail_names.append(idx_to_entity.get(tail_idx, f"node_{tail_idx}"))
-        relation_names.append(idx_to_relation.get(rel_idx, f"rel_{rel_idx}"))
+    # Vectorized name lookup using numpy vectorize (faster than Python loop)
+    def get_entity_name(idx):
+        return idx_to_entity.get(int(idx), f"node_{idx}")
+
+    def get_relation_name(idx):
+        return idx_to_relation.get(int(idx), f"rel_{idx}")
+
+    vec_entity_lookup = np.vectorize(get_entity_name)
+    vec_relation_lookup = np.vectorize(get_relation_name)
+
+    print(f"  Mapping entity names...")
+    head_names = vec_entity_lookup(head_ids)
+    tail_names = vec_entity_lookup(tail_ids)
+
+    print(f"  Mapping relation names...")
+    relation_names = vec_relation_lookup(rel_ids)
 
     df = pd.DataFrame({
         'head_id': head_ids,
@@ -623,8 +639,8 @@ def compute_test_scores(
         'relation': relation_names,
         'tail_id': tail_ids,
         'tail': tail_names,
-        'raw_score': all_scores_tensor.tolist(),
-        'sigmoid_score': sigmoid_scores.tolist(),
+        'raw_score': all_scores_tensor.numpy(),
+        'sigmoid_score': sigmoid_scores.numpy(),
     })
 
     # Sort by sigmoid_score in descending order (highest scores first)

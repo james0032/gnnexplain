@@ -1544,10 +1544,30 @@ def run_page_explainer(
     page_cache_dir.mkdir(parents=True, exist_ok=True)
     page_checkpoint_path = page_cache_dir / "page_training_checkpoint.pt"
     checkpoint_interval = page_params.get('checkpoint_interval', 2)
+    force_retrain = page_params.get('force_retrain', False)
     print(f"  Checkpoint directory: {page_cache_dir}")
     print(f"  Checkpoint interval: every {checkpoint_interval} epochs")
+    print(f"  Force retrain: {force_retrain}")
 
-    # Extract subgraphs for training
+    # Check for existing trained model
+    use_cached_model = False
+    if page_checkpoint_path.exists() and not force_retrain:
+        print(f"\n[PAGE] Found cached trained model at {page_checkpoint_path}")
+        try:
+            checkpoint = torch.load(page_checkpoint_path, map_location=device, weights_only=False)
+            if checkpoint.get('training_complete', False):
+                page_explainer.vgae.load_state_dict(checkpoint['vgae_state_dict'])
+                print(f"[PAGE] ✓ Loaded trained VGAE (trained for {checkpoint['epoch']+1} epochs)")
+                print(f"[PAGE]   Training config: {checkpoint.get('training_config', 'N/A')}")
+                print(f"[PAGE]   Final loss: {checkpoint.get('loss', 'N/A'):.4f}" if isinstance(checkpoint.get('loss'), (int, float)) else "")
+                use_cached_model = True
+            else:
+                print(f"[PAGE] Checkpoint found but training was incomplete, will retrain...")
+        except Exception as e:
+            print(f"[PAGE] ⚠ Failed to load cached model: {e}")
+            print(f"[PAGE] Will train from scratch...")
+
+    # Extract subgraphs for training (needed for both training and inference)
     selected_edge_index = selected_triples['selected_edge_index']
     selected_edge_type = selected_triples['selected_edge_type']
     triples_readable = selected_triples['triples_readable']
@@ -1639,21 +1659,23 @@ def run_page_explainer(
             'error': 'No valid subgraphs extracted'
         }
 
-    # Train PAGE with prediction-aware loss
-    print(f"\nTraining Improved PAGE on {len(subgraphs_data)} subgraphs...")
-    print(f"  Using prediction-aware training (weight={prediction_weight})")
-    page_explainer.train_on_subgraphs(
-        subgraphs_data=subgraphs_data,
-        epochs=train_epochs,
-        lr=lr,
-        kl_weight=page_params.get('kl_weight', 0.2),
-        prediction_weight=prediction_weight,
-        verbose=True,
-        checkpoint_path=str(page_checkpoint_path),
-        checkpoint_interval=checkpoint_interval
-    )
-
-    print(f"✓ Improved PAGE training completed")
+    # Train PAGE with prediction-aware loss (skip if using cached model)
+    if use_cached_model:
+        print(f"\n[PAGE] Using cached trained model - skipping training")
+    else:
+        print(f"\nTraining Improved PAGE on {len(subgraphs_data)} subgraphs...")
+        print(f"  Using prediction-aware training (weight={prediction_weight})")
+        page_explainer.train_on_subgraphs(
+            subgraphs_data=subgraphs_data,
+            epochs=train_epochs,
+            lr=lr,
+            kl_weight=page_params.get('kl_weight', 0.2),
+            prediction_weight=prediction_weight,
+            verbose=True,
+            checkpoint_path=str(page_checkpoint_path),
+            checkpoint_interval=checkpoint_interval
+        )
+        print(f"✓ Improved PAGE training completed")
 
     # Generate explanations
     print(f"\nGenerating explanations for {len(triples_readable)} triples...")

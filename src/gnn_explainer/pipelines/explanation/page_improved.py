@@ -130,13 +130,14 @@ class IntegratedVGAE(nn.Module):
         Returns:
             Reconstructed adjacency (batch_size, num_nodes, num_nodes)
         """
-        # Pass through MLP
+        # Pass through MLP - no sigmoid here to avoid double-sigmoid compression
         h = F.relu(self.fc_decode1(z))
-        h = torch.sigmoid(self.fc_decode2(h))
+        h = self.fc_decode2(h)  # Linear output, no sigmoid
         h = F.dropout(h, self.dropout, training=self.training)
 
         # Inner product for adjacency
         adj_reconstructed = torch.bmm(h, h.transpose(1, 2))
+        # Single sigmoid at the end to get probabilities in (0, 1)
         adj_reconstructed = torch.sigmoid(adj_reconstructed)
 
         return adj_reconstructed
@@ -389,14 +390,20 @@ class ImprovedPAGEExplainer:
                         'prediction_weight': prediction_weight
                     }
                 }
-                # Save versioned checkpoint (by epoch number)
+                # Ensure checkpoint directory exists
                 checkpoint_dir = Path(checkpoint_path).parent
+                checkpoint_dir.mkdir(parents=True, exist_ok=True)
+                # Save versioned checkpoint (by epoch number)
                 versioned_path = checkpoint_dir / f'page_checkpoint_epoch_{epoch+1:04d}.pt'
-                torch.save(checkpoint, versioned_path)
-                # Also save as 'latest' for easy resume
-                torch.save(checkpoint, checkpoint_path)
-                if verbose:
-                    print(f"  [Checkpoint saved: {versioned_path.name} and {Path(checkpoint_path).name}]", flush=True)
+                try:
+                    torch.save(checkpoint, versioned_path)
+                    # Also save as 'latest' for easy resume
+                    torch.save(checkpoint, checkpoint_path)
+                    if verbose:
+                        print(f"  [Checkpoint saved: {versioned_path.name} and {Path(checkpoint_path).name}]", flush=True)
+                except Exception as e:
+                    if verbose:
+                        print(f"  [WARNING: Failed to save checkpoint: {e}]", flush=True)
 
             if verbose and ((epoch + 1) % print_interval == 0 or epoch == start_epoch or epoch == epochs - 1):
                 avg_loss = total_loss / len(subgraphs_data)
@@ -418,6 +425,34 @@ class ImprovedPAGEExplainer:
                       f"Recon={avg_recon:.4f}, "
                       f"KL={avg_kl:.4f} "
                       f"| ETA: {eta_mins}m {eta_secs}s", flush=True)
+
+        # Always save final checkpoint after training completes
+        if checkpoint_path is not None:
+            from pathlib import Path
+            final_loss = total_loss / len(subgraphs_data) if subgraphs_data else 0
+            checkpoint = {
+                'epoch': epochs - 1,
+                'vgae_state_dict': self.vgae.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'loss': final_loss,
+                'training_config': {
+                    'epochs': epochs,
+                    'lr': lr,
+                    'kl_weight': kl_weight,
+                    'prediction_weight': prediction_weight
+                },
+                'training_complete': True
+            }
+            # Ensure checkpoint directory exists
+            checkpoint_dir = Path(checkpoint_path).parent
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                torch.save(checkpoint, checkpoint_path)
+                if verbose:
+                    print(f"  [Final checkpoint saved: {Path(checkpoint_path).name}]", flush=True)
+            except Exception as e:
+                if verbose:
+                    print(f"  [WARNING: Failed to save final checkpoint: {e}]", flush=True)
 
     def explain(self, x, adj):
         """

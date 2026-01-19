@@ -440,7 +440,8 @@ def compute_test_scores(
     knowledge_graph: Dict = None,
     device_str: str = "cuda",
     batch_size: int = 1024,
-    top_k_triples: int = 10
+    top_k_triples: int = 10,
+    custom_test_file: str = None
 ) -> Dict:
     """
     Compute prediction scores for test triples.
@@ -453,6 +454,8 @@ def compute_test_scores(
         device_str: Device string ("cuda" or "cpu")
         batch_size: Batch size for scoring
         top_k_triples: Number of top triples to output to file (default: 10)
+        custom_test_file: Optional path to custom test file (tab-separated: head\trelation\ttail)
+                         If provided, scores triples from this file instead of pyg_data['test_triples']
 
     Returns:
         Dictionary with test triples and their prediction scores
@@ -469,6 +472,14 @@ def compute_test_scores(
 
     device = torch.device(device_str if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+
+    # Determine output file prefix from custom_test_file
+    output_prefix = None
+    if custom_test_file:
+        from pathlib import Path
+        output_prefix = Path(custom_test_file).stem  # filename without extension
+        print(f"Custom test file: {custom_test_file}")
+        print(f"Output prefix: {output_prefix}")
 
     # Extract model configuration
     model_state_dict = trained_model_artifact['model_state_dict']
@@ -533,7 +544,58 @@ def compute_test_scores(
         edge_type = graph_data['edge_type'].to(device)
         g = None
 
-    test_triples = graph_data['test_triples']
+    # Load test triples from custom file or use default from graph data
+    if custom_test_file:
+        print(f"\nLoading test triples from custom file: {custom_test_file}")
+        # Get entity and relation mappings from knowledge_graph
+        node_dict = knowledge_graph.get('node_dict', {})
+        rel_dict = knowledge_graph.get('rel_dict', {})
+
+        # Parse custom test file (tab-separated: head\trelation\ttail)
+        custom_triples = []
+        skipped = 0
+        with open(custom_test_file, 'r') as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split('\t')
+                if len(parts) != 3:
+                    print(f"  Warning: Skipping line {line_num}, expected 3 tab-separated values, got {len(parts)}")
+                    skipped += 1
+                    continue
+                head, relation, tail = parts
+
+                # Convert names to indices
+                head_idx = node_dict.get(head)
+                rel_idx = rel_dict.get(relation)
+                tail_idx = node_dict.get(tail)
+
+                if head_idx is None:
+                    print(f"  Warning: Unknown entity '{head}' at line {line_num}")
+                    skipped += 1
+                    continue
+                if rel_idx is None:
+                    print(f"  Warning: Unknown relation '{relation}' at line {line_num}")
+                    skipped += 1
+                    continue
+                if tail_idx is None:
+                    print(f"  Warning: Unknown entity '{tail}' at line {line_num}")
+                    skipped += 1
+                    continue
+
+                custom_triples.append([head_idx, rel_idx, tail_idx])
+
+        if not custom_triples:
+            raise ValueError(f"No valid triples found in {custom_test_file}")
+
+        test_triples = torch.tensor(custom_triples, dtype=torch.long)
+        print(f"  Loaded {len(test_triples)} triples from custom file")
+        if skipped > 0:
+            print(f"  Skipped {skipped} invalid lines")
+    else:
+        test_triples = graph_data['test_triples']
+
     num_triples = len(test_triples)
 
     print(f"\nScoring {num_triples:,} test triples...")
@@ -668,15 +730,18 @@ def compute_test_scores(
 
     print(f"\n✓ Created top {top_k_triples} triples file")
     print("  (Tab-separated format: head\\trelation\\ttail)")
+    if output_prefix:
+        print(f"  Output prefix: {output_prefix}")
     print("\n" + "="*60)
 
     # Return pickle data, CSV DataFrame, and topk text
     scores_dict = {
-        'test_triples': test_triples.cpu(),
+        'test_triples': test_triples.cpu() if hasattr(test_triples, 'cpu') else test_triples,
         'scores': all_scores_tensor,
         'sigmoid_scores': sigmoid_scores,
         'model_type': model_type,
         'decoder_type': decoder_type,
+        'output_prefix': output_prefix,  # For custom output file naming
     }
 
     return scores_dict, df, topk_text

@@ -36,7 +36,8 @@ def create_pipeline(**kwargs) -> Pipeline:
                 "knowledge_graph": "knowledge_graph",
                 "device_str": "params:device",
                 "batch_size": "params:evaluation.scoring_batch_size",
-                "top_k_triples": "params:evaluation.top_k_triples"
+                "top_k_triples": "params:evaluation.top_k_triples",
+                "custom_test_file": "params:evaluation.custom_test_file"
             },
             outputs=["test_triple_scores", "test_triple_scores_csv", "top10_test"],
             name="compute_test_scores",

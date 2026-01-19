@@ -119,7 +119,7 @@ explanation:
     dropout: 0.0                          # Dropout rate
     kl_weight: 0.2                        # Weight for KL divergence loss
     prediction_weight: 1.0                # Weight for prediction-aware training (NEW!)
-    top_k_edges: 10                       # Number of top important edges to extract
+    top_k_edges: 100                       # Number of top important edges to extract
     checkpoint_interval: 10               # Save checkpoint every N epochs during PAGE training
     checkpoint_dir: "data/06_explainer_cache"  # Directory for PAGE checkpoints
     force_retrain: false                  # Force retraining even if cached model exists

@@ -72,7 +72,7 @@ test_triple_scores_csv:
 
 top10_test:
   type: text.TextDataset
-  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_clean_baseline/data/07_model_output/top10_test.txt
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_clean_baseline/data/07_model_output/topk_test.txt
 
 accuracy_metric:
   type: pickle.PickleDataset

@@ -439,7 +439,8 @@ def compute_test_scores(
     pyg_data: Dict = None,
     knowledge_graph: Dict = None,
     device_str: str = "cuda",
-    batch_size: int = 1024
+    batch_size: int = 1024,
+    top_k_triples: int = 10
 ) -> Dict:
     """
     Compute prediction scores for test triples.
@@ -451,6 +452,7 @@ def compute_test_scores(
         knowledge_graph: Knowledge graph with dictionaries
         device_str: Device string ("cuda" or "cpu")
         batch_size: Batch size for scoring
+        top_k_triples: Number of top triples to output to file (default: 10)
 
     Returns:
         Dictionary with test triples and their prediction scores
@@ -652,23 +654,23 @@ def compute_test_scores(
     for i in range(min(5, len(df))):
         print(f"  {i+1}. ({df.iloc[i]['head']}, {df.iloc[i]['relation']}, {df.iloc[i]['tail']}) - score: {df.iloc[i]['sigmoid_score']:.4f}")
 
-    # Create top 10 triples string in test file format (tab-separated: head\trelation\ttail)
-    top10_df = df.head(10)
-    top10_lines = []
+    # Create top-k triples string in test file format (tab-separated: head\trelation\ttail)
+    topk_df = df.head(top_k_triples)
+    topk_lines = []
 
-    for i in range(len(top10_df)):
-        head = top10_df.iloc[i]['head']
-        relation = top10_df.iloc[i]['relation']
-        tail = top10_df.iloc[i]['tail']
-        top10_lines.append(f"{head}\t{relation}\t{tail}")
+    for i in range(len(topk_df)):
+        head = topk_df.iloc[i]['head']
+        relation = topk_df.iloc[i]['relation']
+        tail = topk_df.iloc[i]['tail']
+        topk_lines.append(f"{head}\t{relation}\t{tail}")
 
-    top10_text = "\n".join(top10_lines)
+    topk_text = "\n".join(topk_lines)
 
-    print(f"\n✓ Created top 10 triples file")
+    print(f"\n✓ Created top {top_k_triples} triples file")
     print("  (Tab-separated format: head\\trelation\\ttail)")
     print("\n" + "="*60)
 
-    # Return pickle data, CSV DataFrame, and top10 text
+    # Return pickle data, CSV DataFrame, and topk text
     scores_dict = {
         'test_triples': test_triples.cpu(),
         'scores': all_scores_tensor,
@@ -677,4 +679,4 @@ def compute_test_scores(
         'decoder_type': decoder_type,
     }
 
-    return scores_dict, df, top10_text
+    return scores_dict, df, topk_text

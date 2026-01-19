@@ -122,7 +122,7 @@ test_triple_scores_csv:
 
 top10_test:
   type: text.TextDataset
-  filepath: data/07_model_output/top10_test.txt
+  filepath: data/07_model_output/topk_test.txt
 
 accuracy_metric:
   type: pickle.PickleDataset

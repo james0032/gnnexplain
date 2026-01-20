@@ -499,10 +499,8 @@ def run_pagelink_explainer(
     print(f"\nComputing embeddings from trained model...")
     model.eval()
     with torch.no_grad():
-        # CompGCN models have encode() method that returns node embeddings
-        # and rel_emb attribute for relation embeddings
-        node_emb = model.encode(edge_index_model, edge_type_model)
-        rel_emb = model.rel_emb  # Relation embeddings from CompGCN
+        # CompGCN encode() returns tuple: (node_embeddings, relation_embeddings)
+        node_emb, rel_emb = model.encode(edge_index_model, edge_type_model)
     print(f"  Node embeddings: {node_emb.shape}")
     print(f"  Relation embeddings: {rel_emb.shape}")
 

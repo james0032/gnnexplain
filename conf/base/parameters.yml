@@ -80,9 +80,9 @@ explanation:
                                           # - "from_file": load triples from a file (e.g., topk_test.txt)
                                           # - "specific_relations": select triples with specific relation types
                                           # - "specific_nodes": select triples involving specific nodes
-    num_triples: 100                       # Number of triples to explain (ignored for "from_file")
+    num_triples: 101                       # Number of triples to explain (ignored for "from_file")
     catalog_name: "top10_test"            # Kedro catalog dataset name (preferred method)
-    file_path: "data/07_model_output/topk_test.txt"  # Fallback file path for "from_file" strategy
+    file_path: "data/07_model_output/top10_test.txt"  # Fallback file path for "from_file" strategy
     target_relations: [0, 1]              # For "specific_relations" strategy
     target_nodes: []                      # For "specific_nodes" strategy
 

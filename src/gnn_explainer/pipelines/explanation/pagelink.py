@@ -483,16 +483,28 @@ def run_pagelink_explainer(
     print("RUNNING PaGE-Link EXPLAINER")
     print("="*60)
 
-    # Extract components
+    # Extract components from model_dict
     model = model_dict['model']
-    node_emb = model_dict['node_emb']
-    rel_emb = model_dict['rel_emb']
     device = model_dict['device']
+    edge_index_model = model_dict['edge_index']
+    edge_type_model = model_dict['edge_type']
 
-    edge_index = pyg_data['edge_index']
-    edge_type = pyg_data['edge_type']
+    # Get graph info from pyg_data
+    edge_index = pyg_data['edge_index'].to(device)
+    edge_type = pyg_data['edge_type'].to(device)
     num_nodes = pyg_data['num_nodes']
     num_relations = pyg_data['num_relations']
+
+    # Compute node and relation embeddings from the trained model
+    print(f"\nComputing embeddings from trained model...")
+    model.eval()
+    with torch.no_grad():
+        # CompGCN models have encode() method that returns node embeddings
+        # and rel_emb attribute for relation embeddings
+        node_emb = model.encode(edge_index_model, edge_type_model)
+        rel_emb = model.rel_emb  # Relation embeddings from CompGCN
+    print(f"  Node embeddings: {node_emb.shape}")
+    print(f"  Relation embeddings: {rel_emb.shape}")
 
     # Get parameters
     pagelink_params = explainer_params.get('pagelink', {})

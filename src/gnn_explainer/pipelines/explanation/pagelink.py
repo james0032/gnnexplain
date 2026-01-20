@@ -79,7 +79,8 @@ class PaGELinkExplainer(nn.Module):
         self,
         head_idx: int,
         tail_idx: int,
-        num_hops: int = 2
+        num_hops: int = 2,
+        verbose: bool = False
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict]:
         """
         Extract k-hop subgraph around head and tail nodes.
@@ -90,51 +91,95 @@ class PaGELinkExplainer(nn.Module):
             subset: Original node indices in subgraph
             mapping: Dict mapping original indices to local indices
         """
-        # Collect nodes within k hops of both head and tail
-        nodes_to_visit = {head_idx, tail_idx}
-        visited = set()
+        import time
 
-        for _ in range(num_hops):
-            new_nodes = set()
-            for node in nodes_to_visit:
-                if node in visited:
-                    continue
-                visited.add(node)
+        if verbose:
+            print(f"      Extracting {num_hops}-hop subgraph...", flush=True)
+        start_time = time.time()
 
-                # Find neighbors
-                mask_src = self.edge_index[0] == node
-                mask_dst = self.edge_index[1] == node
-                neighbors = torch.cat([
-                    self.edge_index[1, mask_src],
-                    self.edge_index[0, mask_dst]
-                ]).unique()
-                new_nodes.update(neighbors.tolist())
+        # Collect nodes within k hops of both head and tail using vectorized operations
+        # Start with head and tail nodes
+        current_nodes = torch.tensor([head_idx, tail_idx], device=self.device)
+        all_nodes = current_nodes.clone()
 
-            nodes_to_visit = new_nodes - visited
+        for hop in range(num_hops):
+            if verbose:
+                print(f"        Hop {hop+1}/{num_hops}: {len(current_nodes):,} nodes to expand...", end='', flush=True)
+            hop_start = time.time()
 
-        visited.update(nodes_to_visit)
-        subset = torch.tensor(sorted(list(visited)), device=self.device)
+            # Vectorized neighbor finding using isin
+            # Find all edges where source is in current_nodes
+            src_mask = torch.isin(self.edge_index[0], current_nodes)
+            # Find all edges where destination is in current_nodes
+            dst_mask = torch.isin(self.edge_index[1], current_nodes)
 
-        # Create mapping from original to local indices
-        mapping = {orig.item(): local for local, orig in enumerate(subset)}
+            # Get neighbors (destinations where source matches, sources where dest matches)
+            neighbors_from_src = self.edge_index[1, src_mask]
+            neighbors_from_dst = self.edge_index[0, dst_mask]
 
-        # Extract edges within subgraph
-        node_set = set(subset.tolist())
-        edge_mask = torch.tensor([
-            self.edge_index[0, i].item() in node_set and
-            self.edge_index[1, i].item() in node_set
-            for i in range(self.edge_index.size(1))
-        ], device=self.device)
+            # Combine and get unique new nodes
+            new_neighbors = torch.cat([neighbors_from_src, neighbors_from_dst]).unique()
+
+            # Add to all_nodes
+            all_nodes = torch.cat([all_nodes, new_neighbors]).unique()
+
+            # Next iteration expands from newly discovered nodes
+            current_nodes = new_neighbors
+
+            if verbose:
+                print(f" found {len(new_neighbors):,} neighbors ({time.time()-hop_start:.2f}s)", flush=True)
+
+        subset = all_nodes.sort()[0]  # Sort for consistent ordering
+
+        if verbose:
+            print(f"        Total subgraph nodes: {len(subset):,}", flush=True)
+            print(f"        Filtering edges...", end='', flush=True)
+        filter_start = time.time()
+
+        # Vectorized edge filtering using torch.isin (MUCH faster than Python loop)
+        edge_mask = torch.isin(self.edge_index[0], subset) & torch.isin(self.edge_index[1], subset)
 
         sub_edge_index_orig = self.edge_index[:, edge_mask]
         sub_edge_type = self.edge_type[edge_mask]
 
-        # Remap to local indices
-        sub_edge_index = torch.tensor([
-            [mapping[sub_edge_index_orig[0, i].item()],
-             mapping[sub_edge_index_orig[1, i].item()]]
-            for i in range(sub_edge_index_orig.size(1))
-        ], device=self.device).t() if sub_edge_index_orig.size(1) > 0 else torch.zeros((2, 0), dtype=torch.long, device=self.device)
+        if verbose:
+            print(f" {sub_edge_index_orig.size(1):,} edges ({time.time()-filter_start:.2f}s)", flush=True)
+
+        # Create mapping from original to local indices using vectorized operations
+        if verbose:
+            print(f"        Remapping indices...", end='', flush=True)
+        remap_start = time.time()
+
+        # Create a lookup tensor for fast remapping
+        # This avoids the slow Python dict/loop approach
+        if len(subset) > 0:
+            # Create mapping tensor: mapping_tensor[original_idx] = local_idx
+            # Only works efficiently if subset indices are not too sparse
+            max_idx = subset.max().item() + 1
+
+            # For very large graphs, use searchsorted for memory efficiency
+            if max_idx > 10_000_000:  # Use searchsorted for huge graphs
+                # subset is already sorted, so we can use searchsorted
+                local_src = torch.searchsorted(subset, sub_edge_index_orig[0])
+                local_dst = torch.searchsorted(subset, sub_edge_index_orig[1])
+                sub_edge_index = torch.stack([local_src, local_dst])
+            else:
+                # For smaller graphs, use direct indexing (faster but more memory)
+                mapping_tensor = torch.zeros(max_idx, dtype=torch.long, device=self.device)
+                mapping_tensor[subset] = torch.arange(len(subset), device=self.device)
+
+                local_src = mapping_tensor[sub_edge_index_orig[0]]
+                local_dst = mapping_tensor[sub_edge_index_orig[1]]
+                sub_edge_index = torch.stack([local_src, local_dst])
+        else:
+            sub_edge_index = torch.zeros((2, 0), dtype=torch.long, device=self.device)
+
+        # Also create dict mapping for compatibility with rest of code
+        mapping = {orig.item(): local for local, orig in enumerate(subset)}
+
+        if verbose:
+            print(f" done ({time.time()-remap_start:.2f}s)", flush=True)
+            print(f"        Subgraph extraction total: {time.time()-start_time:.2f}s", flush=True)
 
         return sub_edge_index, sub_edge_type, subset, mapping
 
@@ -339,11 +384,11 @@ class PaGELinkExplainer(nn.Module):
             ).item()
 
         if verbose:
-            print(f"  Original prediction score: {original_score:.4f}")
+            print(f"    Original prediction score: {original_score:.4f}", flush=True)
 
         # Extract subgraph
         sub_edge_index, sub_edge_type, subset, mapping = self._extract_subgraph(
-            head_idx, tail_idx, num_hops
+            head_idx, tail_idx, num_hops, verbose=verbose
         )
 
         num_edges = sub_edge_index.size(1)
@@ -364,7 +409,8 @@ class PaGELinkExplainer(nn.Module):
         tail_local = mapping[tail_idx]
 
         if verbose:
-            print(f"  Subgraph: {len(subset)} nodes, {num_edges} edges")
+            print(f"    Subgraph extracted: {len(subset):,} nodes, {num_edges:,} edges", flush=True)
+            print(f"    Starting optimization ({self.num_epochs} epochs)...", flush=True)
 
         # Initialize edge mask
         edge_mask = self._init_edge_mask(num_edges)
@@ -373,6 +419,7 @@ class PaGELinkExplainer(nn.Module):
         # Optimization loop
         best_loss = float('inf')
         best_mask = None
+        print_interval = max(1, self.num_epochs // 5)  # Print ~5 times during optimization
 
         for epoch in range(self.num_epochs):
             optimizer.zero_grad()
@@ -395,8 +442,8 @@ class PaGELinkExplainer(nn.Module):
                 best_loss = total_loss.item()
                 best_mask = edge_mask.detach().clone()
 
-            if verbose and (epoch + 1) % 20 == 0:
-                print(f"    Epoch {epoch+1}/{self.num_epochs}: loss={total_loss.item():.4f}")
+            if verbose and ((epoch + 1) % print_interval == 0 or epoch == 0):
+                print(f"      Epoch {epoch+1}/{self.num_epochs}: loss={total_loss.item():.4f}", flush=True)
 
         # Use best mask
         edge_mask = best_mask if best_mask is not None else edge_mask.detach()
@@ -524,6 +571,8 @@ def run_pagelink_explainer(
     print(f"  Max path length: {max_path_length}")
 
     # Create explainer
+    print(f"\nInitializing PaGE-Link explainer...")
+    print(f"  Graph size: {num_nodes:,} nodes, {edge_index.size(1):,} edges", flush=True)
     explainer = PaGELinkExplainer(
         model=model,
         edge_index=edge_index,
@@ -539,6 +588,7 @@ def run_pagelink_explainer(
         k_paths=k_paths,
         device=device
     )
+    print(f"  ✓ Explainer initialized successfully", flush=True)
 
     # Get triples to explain
     selected_edge_index = selected_triples['selected_edge_index']

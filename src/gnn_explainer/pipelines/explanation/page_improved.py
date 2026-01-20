@@ -337,6 +337,15 @@ class ImprovedPAGEExplainer:
         start_time = time.time()
         print_interval = max(1, epochs // 20)  # Print ~20 times during training
 
+        # Initialize total_loss in case loop doesn't run (e.g., resuming from completed training)
+        total_loss = 0
+
+        # Skip training if already completed
+        if start_epoch >= epochs:
+            if verbose:
+                print(f"  Training already completed ({start_epoch}/{epochs} epochs). Skipping.", flush=True)
+            return
+
         for epoch in range(start_epoch, epochs):
             epoch_start = time.time()
             total_loss = 0

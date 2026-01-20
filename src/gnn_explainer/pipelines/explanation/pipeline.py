@@ -7,6 +7,7 @@ from .nodes import (
     run_gnnexplainer,
     run_pgexplainer,
     run_page_explainer,
+    run_pagelink_explainer,
     summarize_explanations
 )
 
@@ -99,7 +100,7 @@ def create_pipeline(**kwargs) -> Pipeline:
 
     # If "all" is specified, enable all explainers
     if "all" in enabled_explainers:
-        enabled_explainers = ["gnnexplainer", "pgexplainer", "page"]
+        enabled_explainers = ["gnnexplainer", "pgexplainer", "page", "pagelink"]
 
     print(f"[Pipeline] Enabled explainers: {enabled_explainers}")
 
@@ -156,6 +157,23 @@ def create_pipeline(**kwargs) -> Pipeline:
             )
         )
 
+    # PaGE-Link Explainer node
+    if "pagelink" in enabled_explainers:
+        explainer_nodes.append(
+            node(
+                func=run_pagelink_explainer,
+                inputs={
+                    "model_dict": "prepared_model",
+                    "selected_triples": "selected_triples",
+                    "pyg_data": "pyg_data",
+                    "explainer_params": "params:explanation"
+                },
+                outputs="pagelink_explanations",
+                name="run_pagelink_explainer",
+                tags=["pagelink", "explainer"]
+            )
+        )
+
     # Summary node - only include if multiple explainers are enabled
     # The summary node requires outputs from all enabled explainers
     summary_nodes = []
@@ -171,6 +189,8 @@ def create_pipeline(**kwargs) -> Pipeline:
             summary_inputs["pg_explanations"] = "pg_explanations"
         if "page" in enabled_explainers:
             summary_inputs["page_explanations"] = "page_explanations"
+        if "pagelink" in enabled_explainers:
+            summary_inputs["pagelink_explanations"] = "pagelink_explanations"
 
         summary_nodes = [
             node(

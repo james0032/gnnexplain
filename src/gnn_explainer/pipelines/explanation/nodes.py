@@ -1572,77 +1572,153 @@ def run_page_explainer(
     selected_edge_type = selected_triples['selected_edge_type']
     triples_readable = selected_triples['triples_readable']
 
-    print(f"\nExtracting subgraphs with CompGCN features for {len(triples_readable)} triples...")
+    # Subgraph cache path
+    subgraph_cache_path = page_cache_dir / "page_subgraphs_cache.pt"
+    force_reextract = page_params.get('force_reextract', False)
 
     import time as time_module
-    extract_start_time = time_module.time()
 
-    subgraphs_data = []
-    subgraph_info = []
+    # Try to load cached subgraphs
+    subgraphs_data = None
+    subgraph_info = None
 
-    total_triples = len(triples_readable)
-    for i in range(total_triples):
-        head_idx = selected_edge_index[0, i].item()
-        tail_idx = selected_edge_index[1, i].item()
-        rel_idx = selected_edge_type[i].item()
-
-        # Show progress every 10% or at least every 10 triples
-        progress_interval = max(1, total_triples // 10)
-        if i % progress_interval == 0 or i == total_triples - 1:
-            elapsed = time_module.time() - extract_start_time
-            if i > 0:
-                eta_seconds = (elapsed / i) * (total_triples - i)
-                eta_mins = int(eta_seconds / 60)
-                eta_secs = int(eta_seconds % 60)
-                print(f"  Extracting subgraph [{i+1}/{total_triples}] ({100*(i+1)/total_triples:.0f}%) | ETA: {eta_mins}m {eta_secs}s", flush=True)
-            else:
-                print(f"  Extracting subgraph [{i+1}/{total_triples}] ({100*(i+1)/total_triples:.0f}%)", flush=True)
-
+    if subgraph_cache_path.exists() and not force_reextract:
+        print(f"\n[PAGE] Found cached subgraphs at {subgraph_cache_path}")
         try:
-            # Extract subgraph around head and tail
-            subgraph_nodes, subgraph_edges, adj_matrix = extract_link_subgraph(
-                edge_index=edge_index.cpu(),
-                head_idx=head_idx,
-                tail_idx=tail_idx,
-                num_hops=k_hops,
-                num_nodes=num_nodes,
-                method=subgraph_method,
-                edge_type=edge_type.cpu() if subgraph_method == 'paths' else None,
-                max_path_length=max_path_length
+            cache = torch.load(subgraph_cache_path, map_location=device, weights_only=False)
+
+            # Verify cache matches current configuration
+            cache_config = cache.get('config', {})
+            current_config = {
+                'num_triples': len(triples_readable),
+                'subgraph_method': subgraph_method,
+                'max_path_length': max_path_length,
+                'k_hops': k_hops,
+            }
+
+            # Check if first triple matches (simple validation)
+            cache_triples = cache.get('triples_readable', [])
+            config_matches = (
+                cache_config.get('num_triples') == current_config['num_triples'] and
+                cache_config.get('subgraph_method') == current_config['subgraph_method'] and
+                cache_config.get('max_path_length') == current_config['max_path_length'] and
+                len(cache_triples) > 0 and len(triples_readable) > 0 and
+                cache_triples[0].get('triple') == triples_readable[0].get('triple')
             )
 
-            num_subgraph_nodes = len(subgraph_nodes)
-            if num_subgraph_nodes > 0:
-                # Get CompGCN features for subgraph nodes
-                subgraph_features = page_explainer.get_subgraph_features(subgraph_nodes)
-
-                # Add batch dimension
-                x = subgraph_features.unsqueeze(0)  # (1, num_nodes, embedding_dim)
-                adj = adj_matrix.unsqueeze(0)  # (1, num_nodes, num_nodes)
-
-                # Get prediction score from CompGCN
-                prediction_score = page_explainer.get_triple_score(head_idx, tail_idx, rel_idx)
-
-                subgraphs_data.append({
-                    'features': x,
-                    'adj': adj,
-                    'prediction_score': prediction_score
-                })
-
-                subgraph_info.append({
-                    'triple_idx': i,
-                    'num_nodes': num_subgraph_nodes,
-                    'num_edges': subgraph_edges.size(1) if subgraph_edges.numel() > 0 else 0,
-                    'subgraph_nodes': subgraph_nodes,
-                    'subgraph_edges': subgraph_edges,
-                    'prediction_score': prediction_score
-                })
-
+            if config_matches:
+                subgraphs_data = cache['subgraphs_data']
+                subgraph_info = cache['subgraph_info']
+                print(f"[PAGE] ✓ Loaded {len(subgraphs_data)} cached subgraphs")
+                print(f"[PAGE]   Config: method={cache_config.get('subgraph_method')}, "
+                      f"max_path_length={cache_config.get('max_path_length')}, "
+                      f"extraction_time={cache_config.get('extraction_time', 'N/A')}")
+            else:
+                print(f"[PAGE] ⚠ Cache config mismatch, will re-extract subgraphs")
+                print(f"[PAGE]   Cached: {cache_config}")
+                print(f"[PAGE]   Current: {current_config}")
+                subgraphs_data = None
+                subgraph_info = None
         except Exception as e:
-            print(f"  Warning: Failed to extract subgraph for triple {i}: {e}")
+            print(f"[PAGE] ⚠ Failed to load cached subgraphs: {e}")
+            subgraphs_data = None
+            subgraph_info = None
 
-    extract_time = time_module.time() - extract_start_time
-    print(f"✓ Extracted {len(subgraphs_data)} subgraphs with CompGCN features in {extract_time:.1f}s")
+    # Extract subgraphs if not loaded from cache
+    if subgraphs_data is None:
+        print(f"\nExtracting subgraphs with CompGCN features for {len(triples_readable)} triples...")
+        extract_start_time = time_module.time()
+
+        subgraphs_data = []
+        subgraph_info = []
+
+        total_triples = len(triples_readable)
+        for i in range(total_triples):
+            head_idx = selected_edge_index[0, i].item()
+            tail_idx = selected_edge_index[1, i].item()
+            rel_idx = selected_edge_type[i].item()
+
+            # Show progress every 10% or at least every 10 triples
+            progress_interval = max(1, total_triples // 10)
+            if i % progress_interval == 0 or i == total_triples - 1:
+                elapsed = time_module.time() - extract_start_time
+                if i > 0:
+                    eta_seconds = (elapsed / i) * (total_triples - i)
+                    eta_mins = int(eta_seconds / 60)
+                    eta_secs = int(eta_seconds % 60)
+                    print(f"  Extracting subgraph [{i+1}/{total_triples}] ({100*(i+1)/total_triples:.0f}%) | ETA: {eta_mins}m {eta_secs}s", flush=True)
+                else:
+                    print(f"  Extracting subgraph [{i+1}/{total_triples}] ({100*(i+1)/total_triples:.0f}%)", flush=True)
+
+            try:
+                # Extract subgraph around head and tail
+                subgraph_nodes, subgraph_edges, adj_matrix = extract_link_subgraph(
+                    edge_index=edge_index.cpu(),
+                    head_idx=head_idx,
+                    tail_idx=tail_idx,
+                    num_hops=k_hops,
+                    num_nodes=num_nodes,
+                    method=subgraph_method,
+                    edge_type=edge_type.cpu() if subgraph_method == 'paths' else None,
+                    max_path_length=max_path_length
+                )
+
+                num_subgraph_nodes = len(subgraph_nodes)
+                if num_subgraph_nodes > 0:
+                    # Get CompGCN features for subgraph nodes
+                    subgraph_features = page_explainer.get_subgraph_features(subgraph_nodes)
+
+                    # Add batch dimension
+                    x = subgraph_features.unsqueeze(0)  # (1, num_nodes, embedding_dim)
+                    adj = adj_matrix.unsqueeze(0)  # (1, num_nodes, num_nodes)
+
+                    # Get prediction score from CompGCN
+                    prediction_score = page_explainer.get_triple_score(head_idx, tail_idx, rel_idx)
+
+                    subgraphs_data.append({
+                        'features': x,
+                        'adj': adj,
+                        'prediction_score': prediction_score
+                    })
+
+                    subgraph_info.append({
+                        'triple_idx': i,
+                        'num_nodes': num_subgraph_nodes,
+                        'num_edges': subgraph_edges.size(1) if subgraph_edges.numel() > 0 else 0,
+                        'subgraph_nodes': subgraph_nodes,
+                        'subgraph_edges': subgraph_edges,
+                        'prediction_score': prediction_score
+                    })
+
+            except Exception as e:
+                print(f"  Warning: Failed to extract subgraph for triple {i}: {e}")
+
+        extract_time = time_module.time() - extract_start_time
+        print(f"✓ Extracted {len(subgraphs_data)} subgraphs with CompGCN features in {extract_time:.1f}s")
+
+        # Save subgraphs to cache
+        if len(subgraphs_data) > 0:
+            print(f"\n[PAGE] Saving subgraphs to cache: {subgraph_cache_path}")
+            try:
+                # Ensure cache directory exists
+                subgraph_cache_path.parent.mkdir(parents=True, exist_ok=True)
+
+                cache = {
+                    'subgraphs_data': subgraphs_data,
+                    'subgraph_info': subgraph_info,
+                    'triples_readable': triples_readable,
+                    'config': {
+                        'num_triples': len(triples_readable),
+                        'subgraph_method': subgraph_method,
+                        'max_path_length': max_path_length,
+                        'k_hops': k_hops,
+                        'extraction_time': f"{extract_time:.1f}s",
+                    }
+                }
+                torch.save(cache, subgraph_cache_path)
+                print(f"[PAGE] ✓ Saved {len(subgraphs_data)} subgraphs to cache")
+            except Exception as e:
+                print(f"[PAGE] ⚠ Failed to save subgraphs cache: {e}")
 
     # Show prediction score statistics
     if subgraphs_data:
@@ -1787,11 +1863,46 @@ def run_page_explainer(
     }
 
 
+def run_pagelink_explainer(
+    model_dict: Dict,
+    selected_triples: Dict,
+    pyg_data: Dict,
+    explainer_params: Dict
+) -> Dict:
+    """
+    Run PaGE-Link explainer on selected triples.
+
+    PaGE-Link learns edge masks through optimization with path-based
+    regularization, then extracts k-shortest paths as explanations.
+
+    Based on: "PaGE-Link: Path-based Graph Neural Network Explanation
+    for Heterogeneous Link Prediction" (WWW 2023)
+
+    Args:
+        model_dict: Prepared model dictionary with model, embeddings, device
+        selected_triples: Selected triples to explain
+        pyg_data: PyG format graph data
+        explainer_params: Explainer parameters
+
+    Returns:
+        Dictionary with explanations including paths and edge masks
+    """
+    from .pagelink import run_pagelink_explainer as _run_pagelink
+
+    return _run_pagelink(
+        model_dict=model_dict,
+        selected_triples=selected_triples,
+        pyg_data=pyg_data,
+        explainer_params=explainer_params
+    )
+
+
 def summarize_explanations(
     gnn_explanations: Optional[Dict] = None,
     pg_explanations: Optional[Dict] = None,
     knowledge_graph: Dict = None,
-    page_explanations: Optional[Dict] = None
+    page_explanations: Optional[Dict] = None,
+    pagelink_explanations: Optional[Dict] = None
 ) -> Dict:
     """
     Summarize and compare explanations from different explainers.
@@ -1803,6 +1914,7 @@ def summarize_explanations(
         pg_explanations: PGExplainer results (optional)
         knowledge_graph: Knowledge graph with dictionaries
         page_explanations: PAGE explainer results (optional)
+        pagelink_explanations: PaGE-Link explainer results (optional)
 
     Returns:
         Summary dictionary with comparisons and insights
@@ -1845,6 +1957,16 @@ def summarize_explanations(
         }
         summary['explainers_run'].append('page_explainer')
         print(f"PAGE Explainer: {summary['page_explainer']['successful']}/{summary['page_explainer']['num_explanations']} successful")
+
+    # Add PaGE-Link if available
+    if pagelink_explanations is not None:
+        summary['pagelink_explainer'] = {
+            'num_explanations': pagelink_explanations['num_explanations'],
+            'successful': sum(1 for e in pagelink_explanations['explanations'] if 'error' not in e),
+            'failed': sum(1 for e in pagelink_explanations['explanations'] if 'error' in e)
+        }
+        summary['explainers_run'].append('pagelink_explainer')
+        print(f"PaGE-Link Explainer: {summary['pagelink_explainer']['successful']}/{summary['pagelink_explainer']['num_explanations']} successful")
 
     # Skip comparison if less than 2 explainers were run
     if len(summary['explainers_run']) < 2:

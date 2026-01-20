@@ -104,6 +104,10 @@ page_explanations:
   type: pickle.PickleDataset
   filepath: data/05_model_explanations/page_explanations.pkl
 
+pagelink_explanations:
+  type: pickle.PickleDataset
+  filepath: data/05_model_explanations/pagelink_explanations.pkl
+
 explanation_summary:
   type: pickle.PickleDataset
   filepath: data/05_model_explanations/explanation_summary.pkl

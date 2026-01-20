@@ -57,7 +57,7 @@ evaluation:
   num_neg_samples: 10
   scoring_batch_size: 8192            # Batch size for compute_test_scores (larger = faster, uses more GPU memory)
   top_k_triples: 100                   # Number of top triples to output to topk_test.txt
-  custom_test_file: data/01_raw/matrix.txt              # Optional: path to custom test file (tab-separated: head\trelation\ttail)
+  custom_test_file: "/projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_clean_baseline/data/01_raw/matrix.txt"              # Optional: path to custom test file (tab-separated: head\trelation\ttail)
                                       # If set, scores triples from this file instead of default test set
                                       # Example: "data/01_raw/my_triples.txt"
   hit_k_values: [1, 3, 10]

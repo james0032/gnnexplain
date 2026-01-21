@@ -80,7 +80,7 @@ explanation:
                                           # - "from_file": load triples from a file (e.g., topk_test.txt)
                                           # - "specific_relations": select triples with specific relation types
                                           # - "specific_nodes": select triples involving specific nodes
-    num_triples: 101                       # Number of triples to explain (ignored for "from_file")
+    num_triples: 10                       # Number of triples to explain (ignored for "from_file")
     catalog_name: "top10_test"            # Kedro catalog dataset name (preferred method)
     file_path: "data/07_model_output/top10_test.txt"  # Fallback file path for "from_file" strategy
     target_relations: [0, 1]              # For "specific_relations" strategy
@@ -136,10 +136,9 @@ explanation:
     lr: 0.01                                # Learning rate for edge mask optimization
     alpha: 1.0                              # Weight for prediction preservation loss
     beta: 0.1                               # Weight for edge mask sparsity regularization
-    k_paths: 5                              # Number of top paths to extract
-    num_hops: 2                             # Number of hops for subgraph extraction
-    max_path_length: 4                      # Maximum path length for path-based loss
-    top_k_edges: 10                         # Number of top important edges to extract
+    k_paths: 20                             # Number of top paths to extract
+    max_path_length: 3                      # Max path length for subgraph extraction (only edges on paths <= N)
+    top_k_edges: 100                        # Number of top important edges to extract
     checkpoint_dir: "data/06_explainer_cache"  # Directory for PaGE-Link checkpoints
 
   # Legacy explanation settings (for old explanation pipeline)

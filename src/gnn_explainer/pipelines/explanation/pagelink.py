@@ -75,15 +75,60 @@ class PaGELinkExplainer(nn.Module):
             param.requires_grad = False
         self.model.eval()
 
-    def _extract_subgraph(
+        # Cache for full graph adjacency (built once, reused for all triples)
+        self._full_graph_adj = None
+
+    def _build_full_graph_adjacency(self, verbose: bool = False) -> Dict:
+        """
+        Build adjacency list for full graph (cached at class level).
+        Only built once, reused for all triple explanations.
+        """
+        if self._full_graph_adj is not None:
+            if verbose:
+                print(f"        Using cached full graph adjacency", flush=True)
+            return self._full_graph_adj
+
+        import time
+        if verbose:
+            print(f"        Building full graph adjacency (one-time)...", end='', flush=True)
+        start = time.time()
+
+        edge_index_cpu = self.edge_index.cpu()
+        adj = defaultdict(list)
+        for i in range(edge_index_cpu.size(1)):
+            src = edge_index_cpu[0, i].item()
+            dst = edge_index_cpu[1, i].item()
+            adj[src].append((dst, i))
+            adj[dst].append((src, i))  # Undirected for path finding
+
+        self._full_graph_adj = adj
+        if verbose:
+            print(f" done ({time.time()-start:.2f}s)", flush=True)
+
+        return self._full_graph_adj
+
+    def _extract_path_subgraph(
         self,
         head_idx: int,
         tail_idx: int,
-        num_hops: int = 2,
+        max_path_length: int = 3,
         verbose: bool = False
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict]:
         """
-        Extract k-hop subgraph around head and tail nodes.
+        Extract subgraph containing only edges on paths of length <= max_path_length
+        between head and tail nodes.
+
+        This is more efficient and relevant than k-hop + k-core pruning because:
+        1. Only includes edges that could actually be part of an explanation path
+        2. Produces much smaller subgraphs (typically 100-10000 edges vs millions)
+        3. Directly aligned with what the explainer is trying to find
+
+        Algorithm:
+        1. BFS from head to find all nodes reachable within max_path_length steps
+        2. BFS from tail to find all nodes reachable within max_path_length steps
+        3. Keep only nodes reachable from both (intersection)
+        4. For each distance d from head, keep nodes at distance <= max_path_length - d from tail
+        5. Keep only edges between valid nodes
 
         Returns:
             sub_edge_index: Edge index for subgraph (remapped to local indices)
@@ -94,92 +139,134 @@ class PaGELinkExplainer(nn.Module):
         import time
 
         if verbose:
-            print(f"      Extracting {num_hops}-hop subgraph...", flush=True)
+            print(f"      Extracting path-based subgraph (max_length={max_path_length})...", flush=True)
         start_time = time.time()
 
-        # Collect nodes within k hops of both head and tail using vectorized operations
-        # Start with head and tail nodes
-        current_nodes = torch.tensor([head_idx, tail_idx], device=self.device)
-        all_nodes = current_nodes.clone()
+        # Use cached full graph adjacency (built once, reused for all triples)
+        adj = self._build_full_graph_adjacency(verbose=verbose)
 
-        for hop in range(num_hops):
-            if verbose:
-                print(f"        Hop {hop+1}/{num_hops}: {len(current_nodes):,} nodes to expand...", end='', flush=True)
-            hop_start = time.time()
+        # BFS from head: compute distance from head to all reachable nodes
+        if verbose:
+            print(f"        BFS from head...", end='', flush=True)
+        bfs_start = time.time()
 
-            # Vectorized neighbor finding using isin
-            # Find all edges where source is in current_nodes
-            src_mask = torch.isin(self.edge_index[0], current_nodes)
-            # Find all edges where destination is in current_nodes
-            dst_mask = torch.isin(self.edge_index[1], current_nodes)
-
-            # Get neighbors (destinations where source matches, sources where dest matches)
-            neighbors_from_src = self.edge_index[1, src_mask]
-            neighbors_from_dst = self.edge_index[0, dst_mask]
-
-            # Combine and get unique new nodes
-            new_neighbors = torch.cat([neighbors_from_src, neighbors_from_dst]).unique()
-
-            # Add to all_nodes
-            all_nodes = torch.cat([all_nodes, new_neighbors]).unique()
-
-            # Next iteration expands from newly discovered nodes
-            current_nodes = new_neighbors
-
-            if verbose:
-                print(f" found {len(new_neighbors):,} neighbors ({time.time()-hop_start:.2f}s)", flush=True)
-
-        subset = all_nodes.sort()[0]  # Sort for consistent ordering
+        dist_from_head = {head_idx: 0}
+        frontier = [head_idx]
+        for d in range(1, max_path_length + 1):
+            next_frontier = []
+            for node in frontier:
+                for neighbor, _ in adj[node]:
+                    if neighbor not in dist_from_head:
+                        dist_from_head[neighbor] = d
+                        next_frontier.append(neighbor)
+            frontier = next_frontier
+            if not frontier:
+                break
 
         if verbose:
-            print(f"        Total subgraph nodes: {len(subset):,}", flush=True)
-            print(f"        Filtering edges...", end='', flush=True)
-        filter_start = time.time()
+            print(f" reached {len(dist_from_head):,} nodes ({time.time()-bfs_start:.2f}s)", flush=True)
 
-        # Vectorized edge filtering using torch.isin (MUCH faster than Python loop)
-        edge_mask = torch.isin(self.edge_index[0], subset) & torch.isin(self.edge_index[1], subset)
+        # BFS from tail: compute distance from tail to all reachable nodes
+        if verbose:
+            print(f"        BFS from tail...", end='', flush=True)
+        bfs_start = time.time()
 
-        sub_edge_index_orig = self.edge_index[:, edge_mask]
-        sub_edge_type = self.edge_type[edge_mask]
+        dist_from_tail = {tail_idx: 0}
+        frontier = [tail_idx]
+        for d in range(1, max_path_length + 1):
+            next_frontier = []
+            for node in frontier:
+                for neighbor, _ in adj[node]:
+                    if neighbor not in dist_from_tail:
+                        dist_from_tail[neighbor] = d
+                        next_frontier.append(neighbor)
+            frontier = next_frontier
+            if not frontier:
+                break
 
         if verbose:
-            print(f" {sub_edge_index_orig.size(1):,} edges ({time.time()-filter_start:.2f}s)", flush=True)
+            print(f" reached {len(dist_from_tail):,} nodes ({time.time()-bfs_start:.2f}s)", flush=True)
 
-        # Create mapping from original to local indices using vectorized operations
+        # Find nodes on valid paths: dist_from_head[n] + dist_from_tail[n] <= max_path_length
+        if verbose:
+            print(f"        Finding nodes on paths...", end='', flush=True)
+        path_start = time.time()
+
+        valid_nodes = set()
+        for node in dist_from_head:
+            if node in dist_from_tail:
+                if dist_from_head[node] + dist_from_tail[node] <= max_path_length:
+                    valid_nodes.add(node)
+
+        # Always include head and tail
+        valid_nodes.add(head_idx)
+        valid_nodes.add(tail_idx)
+
+        if verbose:
+            print(f" {len(valid_nodes):,} nodes ({time.time()-path_start:.2f}s)", flush=True)
+
+        # Find edges on valid paths using adjacency list (more efficient than iterating all edges)
+        if verbose:
+            print(f"        Finding edges on paths...", end='', flush=True)
+        edge_start = time.time()
+
+        valid_edge_indices = set()
+        for src in valid_nodes:
+            for dst, edge_idx in adj[src]:
+                if dst in valid_nodes:
+                    # Check if this edge can be on a valid path
+                    # An edge (u, v) is on a path if:
+                    # dist_from_head[u] + 1 + dist_from_tail[v] <= max_path_length OR
+                    # dist_from_head[v] + 1 + dist_from_tail[u] <= max_path_length
+                    d_head_src = dist_from_head.get(src, float('inf'))
+                    d_head_dst = dist_from_head.get(dst, float('inf'))
+                    d_tail_src = dist_from_tail.get(src, float('inf'))
+                    d_tail_dst = dist_from_tail.get(dst, float('inf'))
+
+                    if (d_head_src + 1 + d_tail_dst <= max_path_length or
+                        d_head_dst + 1 + d_tail_src <= max_path_length):
+                        valid_edge_indices.add(edge_idx)
+
+        valid_edge_indices = list(valid_edge_indices)
+
+        if verbose:
+            print(f" {len(valid_edge_indices):,} edges ({time.time()-edge_start:.2f}s)", flush=True)
+
+        # Extract subgraph
+        if len(valid_edge_indices) == 0:
+            if verbose:
+                print(f"        WARNING: No edges found on paths!", flush=True)
+            subset = torch.tensor([head_idx, tail_idx], device=self.device)
+            mapping = {head_idx: 0, tail_idx: 1}
+            return torch.zeros((2, 0), dtype=torch.long, device=self.device), \
+                   torch.zeros(0, dtype=torch.long, device=self.device), \
+                   subset, mapping
+
+        valid_edge_indices_t = torch.tensor(valid_edge_indices, dtype=torch.long)
+        sub_edge_index_orig = self.edge_index[:, valid_edge_indices_t]
+        sub_edge_type = self.edge_type[valid_edge_indices_t]
+
+        # Get unique nodes and create mapping
         if verbose:
             print(f"        Remapping indices...", end='', flush=True)
         remap_start = time.time()
 
-        # Create a lookup tensor for fast remapping
-        # This avoids the slow Python dict/loop approach
-        if len(subset) > 0:
-            # Create mapping tensor: mapping_tensor[original_idx] = local_idx
-            # Only works efficiently if subset indices are not too sparse
-            max_idx = subset.max().item() + 1
+        subset = torch.cat([sub_edge_index_orig[0], sub_edge_index_orig[1]]).unique().sort()[0]
+        # Ensure head and tail are in subset
+        subset = torch.cat([subset, torch.tensor([head_idx, tail_idx], device=self.device)]).unique().sort()[0]
 
-            # For very large graphs, use searchsorted for memory efficiency
-            if max_idx > 10_000_000:  # Use searchsorted for huge graphs
-                # subset is already sorted, so we can use searchsorted
-                local_src = torch.searchsorted(subset, sub_edge_index_orig[0])
-                local_dst = torch.searchsorted(subset, sub_edge_index_orig[1])
-                sub_edge_index = torch.stack([local_src, local_dst])
-            else:
-                # For smaller graphs, use direct indexing (faster but more memory)
-                mapping_tensor = torch.zeros(max_idx, dtype=torch.long, device=self.device)
-                mapping_tensor[subset] = torch.arange(len(subset), device=self.device)
+        # Create mapping using searchsorted (efficient for sorted arrays)
+        local_src = torch.searchsorted(subset, sub_edge_index_orig[0])
+        local_dst = torch.searchsorted(subset, sub_edge_index_orig[1])
+        sub_edge_index = torch.stack([local_src, local_dst])
 
-                local_src = mapping_tensor[sub_edge_index_orig[0]]
-                local_dst = mapping_tensor[sub_edge_index_orig[1]]
-                sub_edge_index = torch.stack([local_src, local_dst])
-        else:
-            sub_edge_index = torch.zeros((2, 0), dtype=torch.long, device=self.device)
-
-        # Also create dict mapping for compatibility with rest of code
+        # Dict mapping for compatibility
         mapping = {orig.item(): local for local, orig in enumerate(subset)}
 
         if verbose:
             print(f" done ({time.time()-remap_start:.2f}s)", flush=True)
-            print(f"        Subgraph extraction total: {time.time()-start_time:.2f}s", flush=True)
+            print(f"        Path subgraph extraction total: {time.time()-start_time:.2f}s", flush=True)
+            print(f"        Final subgraph: {len(subset):,} nodes, {sub_edge_index.size(1):,} edges", flush=True)
 
         return sub_edge_index, sub_edge_type, subset, mapping
 
@@ -216,35 +303,61 @@ class PaGELinkExplainer(nn.Module):
         target = torch.tensor([original_score], device=self.device)
         return F.mse_loss(current_score, target)
 
-    def _find_paths_bfs(
+    def _build_adjacency_list(
         self,
         sub_edge_index: torch.Tensor,
-        sub_edge_type: torch.Tensor,
+        sub_edge_type: torch.Tensor
+    ) -> Dict:
+        """
+        Build adjacency list once (cached) - no weights, just structure.
+        Returns dict with adjacency and edge lookup structures.
+        """
+        num_edges = sub_edge_index.size(1)
+
+        # Build adjacency list: node -> [(neighbor, edge_idx, rel_type)]
+        adj = defaultdict(list)
+        for i in range(num_edges):
+            src = sub_edge_index[0, i].item()
+            dst = sub_edge_index[1, i].item()
+            rel = sub_edge_type[i].item()
+            adj[src].append((dst, i, rel))
+            # Also add reverse for undirected search
+            adj[dst].append((src, i, rel))
+
+        # Build edge lookup: (src, dst) -> edge_idx for fast lookups
+        edge_lookup = {}
+        for i in range(num_edges):
+            src = sub_edge_index[0, i].item()
+            dst = sub_edge_index[1, i].item()
+            edge_lookup[(src, dst)] = i
+            edge_lookup[(dst, src)] = i  # undirected
+
+        return {'adj': adj, 'edge_lookup': edge_lookup}
+
+    def _find_paths_bfs(
+        self,
+        adj_data: Dict,
         edge_weights: torch.Tensor,
         head_local: int,
         tail_local: int,
         max_length: int = 4,
         top_k: int = 5
-    ) -> List[List[Tuple[int, int, int]]]:
+    ) -> List[List[Tuple[int, int, int, int]]]:
         """
         Find k-shortest paths using BFS with edge weights.
 
-        Returns list of paths, where each path is a list of (src, rel, dst) tuples.
+        Args:
+            adj_data: Pre-built adjacency data from _build_adjacency_list
+            edge_weights: Current edge weights (changes each epoch)
+            head_local, tail_local: Source and target nodes
+            max_length: Maximum path length
+            top_k: Number of paths to find
+
+        Returns list of paths, where each path is a list of (src, rel, dst, edge_idx) tuples.
         """
         from heapq import heappush, heappop
 
-        num_nodes = max(sub_edge_index.max().item() + 1, max(head_local, tail_local) + 1) if sub_edge_index.numel() > 0 else max(head_local, tail_local) + 1
-
-        # Build adjacency list with weights
-        adj = defaultdict(list)  # node -> [(neighbor, edge_idx, rel_type, weight)]
-        for i in range(sub_edge_index.size(1)):
-            src = sub_edge_index[0, i].item()
-            dst = sub_edge_index[1, i].item()
-            rel = sub_edge_type[i].item()
-            weight = edge_weights[i].item()
-            adj[src].append((dst, i, rel, weight))
-            # Also add reverse for undirected search
-            adj[dst].append((src, i, rel, weight))
+        adj = adj_data['adj']
 
         # Priority queue: (negative_score, path_length, current_node, path)
         # Use negative score because heapq is min-heap but we want max-weight paths
@@ -264,30 +377,30 @@ class PaGELinkExplainer(nn.Module):
                 continue
 
             # State: (node, frozenset of visited edges)
-            visited_edges = frozenset(e[1] for e in path) if path else frozenset()
+            visited_edges = frozenset(e[3] for e in path) if path else frozenset()
             state = (node, visited_edges)
             if state in visited_states:
                 continue
             visited_states.add(state)
 
-            for neighbor, edge_idx, rel, weight in adj[node]:
+            for neighbor, edge_idx, rel in adj[node]:
                 if edge_idx not in visited_edges:
+                    weight = edge_weights[edge_idx].item()
                     new_path = path + [(node, rel, neighbor, edge_idx)]
                     new_score = score + weight
                     heappush(pq, (-new_score, length + 1, neighbor, new_path))
 
-        # Convert to output format
+        # Convert to output format (keep edge_idx for fast lookup later)
         result_paths = []
         for score, path in sorted(found_paths, key=lambda x: -x[0]):
-            result_paths.append([(p[0], p[1], p[2]) for p in path])
+            result_paths.append(path)  # Keep full tuple including edge_idx
 
         return result_paths[:top_k]
 
     def _path_loss(
         self,
         edge_mask: torch.Tensor,
-        sub_edge_index: torch.Tensor,
-        sub_edge_type: torch.Tensor,
+        adj_data: Dict,
         head_local: int,
         tail_local: int,
         max_path_length: int = 4
@@ -297,13 +410,19 @@ class PaGELinkExplainer(nn.Module):
 
         Encourages edges on paths between head and tail to have high weights,
         and edges not on paths to have low weights.
+
+        Args:
+            edge_mask: Learnable edge mask parameters
+            adj_data: Pre-built adjacency data (cached, built once)
+            head_local, tail_local: Source and target nodes in local indices
+            max_path_length: Maximum path length to consider
         """
         # Get edge weights from mask
         edge_weights = torch.sigmoid(edge_mask)
 
-        # Find paths with current weights
+        # Find paths with current weights (uses cached adjacency)
         paths = self._find_paths_bfs(
-            sub_edge_index, sub_edge_type, edge_weights,
+            adj_data, edge_weights,
             head_local, tail_local,
             max_length=max_path_length,
             top_k=self.k_paths
@@ -313,32 +432,28 @@ class PaGELinkExplainer(nn.Module):
             # No paths found - just regularize mask size
             return edge_weights.mean()
 
-        # Collect edge indices on paths
+        # Collect edge indices on paths - O(1) lookup since paths now include edge_idx
         edges_on_paths = set()
         for path in paths:
-            for i, (src, rel, dst) in enumerate(path):
-                # Find matching edge
-                for j in range(sub_edge_index.size(1)):
-                    if (sub_edge_index[0, j].item() == src and
-                        sub_edge_index[1, j].item() == dst):
-                        edges_on_paths.add(j)
-                    elif (sub_edge_index[0, j].item() == dst and
-                          sub_edge_index[1, j].item() == src):
-                        edges_on_paths.add(j)
+            for (src, rel, dst, edge_idx) in path:
+                edges_on_paths.add(edge_idx)
 
         if not edges_on_paths:
             return edge_weights.mean()
 
-        # Path loss: maximize weights on path edges, minimize weights off path edges
-        on_path_mask = torch.zeros(len(edge_mask), device=self.device, dtype=torch.bool)
-        for idx in edges_on_paths:
-            on_path_mask[idx] = True
+        # Vectorized path loss computation
+        edges_on_paths_tensor = torch.tensor(list(edges_on_paths), device=self.device, dtype=torch.long)
 
         # Encourage high weights on path edges (negative loss)
-        on_path_loss = -edge_weights[on_path_mask].mean() if on_path_mask.any() else torch.tensor(0.0, device=self.device)
+        on_path_weights = edge_weights[edges_on_paths_tensor]
+        on_path_loss = -on_path_weights.mean()
 
         # Encourage low weights off path edges (positive loss)
-        off_path_loss = edge_weights[~on_path_mask].mean() if (~on_path_mask).any() else torch.tensor(0.0, device=self.device)
+        # Create mask for off-path edges
+        on_path_mask = torch.zeros(len(edge_mask), device=self.device, dtype=torch.bool)
+        on_path_mask[edges_on_paths_tensor] = True
+        off_path_weights = edge_weights[~on_path_mask]
+        off_path_loss = off_path_weights.mean() if len(off_path_weights) > 0 else torch.tensor(0.0, device=self.device)
 
         return on_path_loss + off_path_loss
 
@@ -351,8 +466,7 @@ class PaGELinkExplainer(nn.Module):
         head_idx: int,
         tail_idx: int,
         rel_idx: int,
-        num_hops: int = 2,
-        max_path_length: int = 4,
+        max_path_length: int = 3,
         verbose: bool = False
     ) -> Dict:
         """
@@ -362,8 +476,7 @@ class PaGELinkExplainer(nn.Module):
             head_idx: Head node index
             tail_idx: Tail node index
             rel_idx: Relation type index
-            num_hops: Number of hops for subgraph extraction
-            max_path_length: Maximum path length to consider
+            max_path_length: Maximum path length for subgraph extraction and path finding
             verbose: Print progress
 
         Returns:
@@ -386,9 +499,9 @@ class PaGELinkExplainer(nn.Module):
         if verbose:
             print(f"    Original prediction score: {original_score:.4f}", flush=True)
 
-        # Extract subgraph
-        sub_edge_index, sub_edge_type, subset, mapping = self._extract_subgraph(
-            head_idx, tail_idx, num_hops, verbose=verbose
+        # Extract path-based subgraph (only edges on paths of length <= max_path_length)
+        sub_edge_index, sub_edge_type, subset, mapping = self._extract_path_subgraph(
+            head_idx, tail_idx, max_path_length=max_path_length, verbose=verbose
         )
 
         num_edges = sub_edge_index.size(1)
@@ -410,6 +523,14 @@ class PaGELinkExplainer(nn.Module):
 
         if verbose:
             print(f"    Subgraph extracted: {len(subset):,} nodes, {num_edges:,} edges", flush=True)
+            print(f"    Building adjacency list...", end='', flush=True)
+
+        # Build adjacency list ONCE (cached for all epochs)
+        import time
+        adj_start = time.time()
+        adj_data = self._build_adjacency_list(sub_edge_index, sub_edge_type)
+        if verbose:
+            print(f" done ({time.time()-adj_start:.2f}s)", flush=True)
             print(f"    Starting optimization ({self.num_epochs} epochs)...", flush=True)
 
         # Initialize edge mask
@@ -424,11 +545,9 @@ class PaGELinkExplainer(nn.Module):
         for epoch in range(self.num_epochs):
             optimizer.zero_grad()
 
-            # Compute losses
-            # For prediction loss, we'd need to modify the model's forward pass
-            # to use edge weights - for simplicity, we focus on path loss
+            # Compute losses using cached adjacency data
             path_loss = self._path_loss(
-                edge_mask, sub_edge_index, sub_edge_type,
+                edge_mask, adj_data,
                 head_local, tail_local, max_path_length
             )
             size_loss = self._mask_size_loss(edge_mask)
@@ -449,19 +568,20 @@ class PaGELinkExplainer(nn.Module):
         edge_mask = best_mask if best_mask is not None else edge_mask.detach()
         edge_weights = torch.sigmoid(edge_mask)
 
-        # Extract final paths
+        # Extract final paths (using cached adjacency)
         paths = self._find_paths_bfs(
-            sub_edge_index, sub_edge_type, edge_weights,
+            adj_data, edge_weights,
             head_local, tail_local,
             max_length=max_path_length,
             top_k=self.k_paths
         )
 
         # Convert paths back to global indices
+        # New path format: (src_local, rel, dst_local, edge_idx)
         global_paths = []
         for path in paths:
             global_path = []
-            for src_local, rel, dst_local in path:
+            for src_local, rel, dst_local, edge_idx in path:
                 src_global = subset[src_local].item()
                 dst_global = subset[dst_local].item()
                 global_path.append((src_global, rel, dst_global))
@@ -558,8 +678,7 @@ def run_pagelink_explainer(
     alpha = pagelink_params.get('alpha', 1.0)
     beta = pagelink_params.get('beta', 0.1)
     k_paths = pagelink_params.get('k_paths', 5)
-    num_hops = pagelink_params.get('num_hops', 2)
-    max_path_length = pagelink_params.get('max_path_length', 4)
+    max_path_length = pagelink_params.get('max_path_length', 3)  # Default 3 for path-based extraction
 
     print(f"\nPaGE-Link Parameters:")
     print(f"  Learning rate: {lr}")
@@ -567,8 +686,7 @@ def run_pagelink_explainer(
     print(f"  Alpha (path loss weight): {alpha}")
     print(f"  Beta (size regularization): {beta}")
     print(f"  K paths to extract: {k_paths}")
-    print(f"  Subgraph hops: {num_hops}")
-    print(f"  Max path length: {max_path_length}")
+    print(f"  Max path length (subgraph): {max_path_length}")
 
     # Create explainer
     print(f"\nInitializing PaGE-Link explainer...")
@@ -614,7 +732,6 @@ def run_pagelink_explainer(
                 head_idx=head_idx,
                 tail_idx=tail_idx,
                 rel_idx=rel_idx,
-                num_hops=num_hops,
                 max_path_length=max_path_length,
                 verbose=True
             )

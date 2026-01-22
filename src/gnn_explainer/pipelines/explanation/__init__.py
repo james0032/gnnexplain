@@ -6,4 +6,11 @@ def create_pipeline(**kwargs):
     from .pipeline import create_pipeline as _create_pipeline
     return _create_pipeline(**kwargs)
 
-__all__ = ["create_pipeline"]
+
+def create_pagelink_analysis_pipeline(**kwargs):
+    """Create standalone pagelink analysis pipeline."""
+    from .pipeline import create_pagelink_analysis_pipeline as _create_pagelink_analysis_pipeline
+    return _create_pagelink_analysis_pipeline(**kwargs)
+
+
+__all__ = ["create_pipeline", "create_pagelink_analysis_pipeline"]

@@ -12,6 +12,19 @@ id_to_name_map:
   type: pickle.PickleDataset
   filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_clean_baseline/data/01_raw/id_to_name.map
 
+# Dictionary files for human-readable name mapping (used by analyze_pagelink_results)
+node_dict_text:
+  type: text.TextDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_clean_baseline/data/01_raw/node_dict
+
+node_name_dict_text:
+  type: text.TextDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_clean_baseline/data/01_raw/node_name_dict.txt
+
+rel_dict_text:
+  type: text.TextDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_clean_baseline/data/01_raw/rel_dict
+
 # Intermediate Data
 knowledge_graph:
   type: pickle.PickleDataset
@@ -56,6 +69,14 @@ pg_explanations:
 page_explanations:
   type: pickle.PickleDataset
   filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_clean_baseline/data/05_model_explanations/page_explanations.pkl
+
+pagelink_explanations:
+  type: pickle.PickleDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_clean_baseline/data/05_model_explanations/pagelink_explanations.pkl
+
+pagelink_analysis:
+  type: pickle.PickleDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_clean_baseline/data/05_model_explanations/pagelink_analysis.pkl
 
 explanation_summary:
   type: pickle.PickleDataset
@@ -110,3 +131,20 @@ visualization_results:
 final_report:
   type: pickle.PickleDataset
   filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_clean_baseline/data/08_reporting/final_report.pkl
+
+# PaGE-Link analysis outputs (human-readable)
+pagelink_important_edges_csv:
+  type: pandas.CSVDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_clean_baseline/data/08_reporting/pagelink_important_edges.csv
+
+pagelink_paths_csv:
+  type: pandas.CSVDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_clean_baseline/data/08_reporting/pagelink_paths.csv
+
+pagelink_important_edges_json:
+  type: json.JSONDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_clean_baseline/data/08_reporting/pagelink_important_edges.json
+
+pagelink_paths_json:
+  type: json.JSONDataset
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_clean_baseline/data/08_reporting/pagelink_paths.json

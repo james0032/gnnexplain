@@ -9,24 +9,25 @@
 
 edge_map:
   type: json.JSONDataset
-  filepath: data/01_raw/edge_map.json
+  filepath: ${oc.env:DATA_DIR,data}/01_raw/edge_map.json
 
 id_to_name_map:
   type: pickle.PickleDataset
   filepath: data/01_raw/id_to_name.map
 
 # Dictionary files for human-readable name mapping
+# Uses DATA_DIR environment variable if set, otherwise falls back to local data/
 node_dict_text:
   type: text.TextDataset
-  filepath: data/01_raw/node_dict
+  filepath: ${oc.env:DATA_DIR,data}/01_raw/node_dict
 
 node_name_dict_text:
   type: text.TextDataset
-  filepath: data/01_raw/node_name_dict.txt
+  filepath: ${oc.env:DATA_DIR,data}/01_raw/node_name_dict.txt
 
 rel_dict_text:
   type: text.TextDataset
-  filepath: data/01_raw/rel_dict
+  filepath: ${oc.env:DATA_DIR,data}/01_raw/rel_dict
 
 # =============================================================================
 # Intermediate Data (02_intermediate)

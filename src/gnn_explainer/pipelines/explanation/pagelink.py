@@ -53,12 +53,12 @@ class PaGELinkExplainer(nn.Module):
         alpha: float = 1.0,  # Weight for path loss
         beta: float = 0.1,   # Weight for mask size regularization
         k_paths: int = 5,    # Number of paths to extract
-        device: str = 'cpu'
+        device: str = 'cpu',
+        exclude_inverse_edges: bool = True,  # Filter out artificial inverse edges
+        edge_direction: torch.Tensor = None  # 0=forward, 1=inverse
     ):
         super().__init__()
         self.model = model
-        self.edge_index = edge_index.to(device)
-        self.edge_type = edge_type.to(device)
         self.num_nodes = num_nodes
         self.num_relations = num_relations
         self.node_emb = node_emb.to(device)
@@ -69,6 +69,19 @@ class PaGELinkExplainer(nn.Module):
         self.beta = beta
         self.k_paths = k_paths
         self.device = device
+
+        # Filter out inverse edges if requested
+        if exclude_inverse_edges and edge_direction is not None:
+            # Keep only forward edges (direction == 0)
+            forward_mask = (edge_direction == 0)
+            self.edge_index = edge_index[:, forward_mask].to(device)
+            self.edge_type = edge_type[forward_mask].to(device)
+            print(f"  Filtered inverse edges: {edge_index.size(1):,} -> {self.edge_index.size(1):,} edges")
+        else:
+            self.edge_index = edge_index.to(device)
+            self.edge_type = edge_type.to(device)
+            if exclude_inverse_edges:
+                print(f"  Warning: exclude_inverse_edges=True but no edge_direction provided")
 
         # Freeze model parameters
         for param in self.model.parameters():
@@ -662,6 +675,24 @@ def run_pagelink_explainer(
     num_nodes = pyg_data['num_nodes']
     num_relations = pyg_data['num_relations']
 
+    # Get or reconstruct edge_direction (0=forward, 1=inverse)
+    # The data preparation code concatenates forward edges, then inverse edges
+    # Each half has the same size (inverse edges are just forward edges with src/dst swapped)
+    if 'edge_direction' in pyg_data:
+        edge_direction = pyg_data['edge_direction']
+    else:
+        # Reconstruct: first half is forward (0), second half is inverse (1)
+        num_edges = edge_index.size(1)
+        edge_direction = torch.cat([
+            torch.zeros(num_edges // 2, dtype=torch.long),
+            torch.ones(num_edges // 2, dtype=torch.long)
+        ])
+        print(f"  Reconstructed edge_direction: {num_edges // 2:,} forward, {num_edges // 2:,} inverse edges")
+
+    # Get exclude_inverse_edges parameter (default True)
+    pagelink_params = explainer_params.get('pagelink', {})
+    exclude_inverse_edges = pagelink_params.get('exclude_inverse_edges', True)
+
     # Compute node and relation embeddings from the trained model
     print(f"\nComputing embeddings from trained model...")
     model.eval()
@@ -671,8 +702,7 @@ def run_pagelink_explainer(
     print(f"  Node embeddings: {node_emb.shape}")
     print(f"  Relation embeddings: {rel_emb.shape}")
 
-    # Get parameters
-    pagelink_params = explainer_params.get('pagelink', {})
+    # Get parameters (pagelink_params already loaded above for exclude_inverse_edges)
     lr = pagelink_params.get('lr', 0.01)
     num_epochs = pagelink_params.get('num_epochs', 100)
     alpha = pagelink_params.get('alpha', 1.0)
@@ -687,6 +717,7 @@ def run_pagelink_explainer(
     print(f"  Beta (size regularization): {beta}")
     print(f"  K paths to extract: {k_paths}")
     print(f"  Max path length (subgraph): {max_path_length}")
+    print(f"  Exclude inverse edges: {exclude_inverse_edges}")
 
     # Create explainer
     print(f"\nInitializing PaGE-Link explainer...")
@@ -704,7 +735,9 @@ def run_pagelink_explainer(
         alpha=alpha,
         beta=beta,
         k_paths=k_paths,
-        device=device
+        device=device,
+        exclude_inverse_edges=exclude_inverse_edges,
+        edge_direction=edge_direction
     )
     print(f"  ✓ Explainer initialized successfully", flush=True)
 

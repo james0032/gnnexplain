@@ -35,6 +35,7 @@ def register_pipelines() -> Dict[str, Pipeline]:
     data_prep_pipeline = data_preparation.create_pipeline()
     training_pipeline = training.create_pipeline()
     explain_pipeline = explanation.create_pipeline(enabled_explainers=enabled_explainers)
+    pagelink_analysis_pipeline = explanation.create_pagelink_analysis_pipeline()
     # eval_pipeline = evaluation.create_pipeline()  # TODO
     # metrics_pipeline = metrics.create_pipeline()  # TODO
 
@@ -57,6 +58,7 @@ def register_pipelines() -> Dict[str, Pipeline]:
         "data_prep": data_prep_pipeline,
         "training": training_pipeline,
         "explanation": explain_pipeline,
+        "pagelink_analysis": pagelink_analysis_pipeline,  # Standalone analysis of existing results
         # "evaluation": eval_pipeline,  # TODO
         # "metrics": metrics_pipeline,  # TODO
 

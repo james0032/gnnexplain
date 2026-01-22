@@ -8,7 +8,10 @@ from .nodes import (
     run_pgexplainer,
     run_page_explainer,
     run_pagelink_explainer,
-    summarize_explanations
+    summarize_explanations,
+    analyze_pagelink_results,
+    export_pagelink_to_csv,
+    export_pagelink_to_json
 )
 
 
@@ -173,6 +176,42 @@ def create_pipeline(**kwargs) -> Pipeline:
                 tags=["pagelink", "explainer"]
             )
         )
+        # PaGE-Link Analysis node - creates human-readable outputs
+        explainer_nodes.append(
+            node(
+                func=analyze_pagelink_results,
+                inputs={
+                    "pagelink_explanations": "pagelink_explanations",
+                    "node_dict": "node_dict_text",
+                    "node_name_dict": "node_name_dict_text",
+                    "rel_dict": "rel_dict_text",
+                    "edge_map": "edge_map"
+                },
+                outputs="pagelink_analysis",
+                name="analyze_pagelink_results",
+                tags=["pagelink", "analysis"]
+            )
+        )
+        # Export to CSV
+        explainer_nodes.append(
+            node(
+                func=export_pagelink_to_csv,
+                inputs="pagelink_analysis",
+                outputs=["pagelink_important_edges_csv", "pagelink_paths_csv"],
+                name="export_pagelink_to_csv",
+                tags=["pagelink", "export"]
+            )
+        )
+        # Export to JSON
+        explainer_nodes.append(
+            node(
+                func=export_pagelink_to_json,
+                inputs="pagelink_analysis",
+                outputs=["pagelink_important_edges_json", "pagelink_paths_json"],
+                name="export_pagelink_to_json",
+                tags=["pagelink", "export"]
+            )
+        )
 
     # Summary node - only include if multiple explainers are enabled
     # The summary node requires outputs from all enabled explainers
@@ -206,3 +245,52 @@ def create_pipeline(**kwargs) -> Pipeline:
     all_nodes = common_nodes + explainer_nodes + summary_nodes
 
     return Pipeline(all_nodes)
+
+
+def create_pagelink_analysis_pipeline(**kwargs) -> Pipeline:
+    """
+    Create a standalone pipeline for analyzing existing PaGE-Link results.
+
+    This pipeline reads an existing pagelink_explanations.pkl file and
+    generates human-readable CSV and JSON outputs without running the
+    full explanation pipeline.
+
+    Usage:
+        kedro run --pipeline=pagelink_analysis
+
+    Outputs:
+        - data/05_model_explanations/pagelink_analysis.pkl
+        - data/08_reporting/pagelink_important_edges.csv
+        - data/08_reporting/pagelink_paths.csv
+        - data/08_reporting/pagelink_important_edges.json
+        - data/08_reporting/pagelink_paths.json
+    """
+    return Pipeline([
+        node(
+            func=analyze_pagelink_results,
+            inputs={
+                "pagelink_explanations": "pagelink_explanations",
+                "node_dict": "node_dict_text",
+                "node_name_dict": "node_name_dict_text",
+                "rel_dict": "rel_dict_text",
+                "edge_map": "edge_map"
+            },
+            outputs="pagelink_analysis",
+            name="analyze_pagelink_results",
+            tags=["pagelink", "analysis"]
+        ),
+        node(
+            func=export_pagelink_to_csv,
+            inputs="pagelink_analysis",
+            outputs=["pagelink_important_edges_csv", "pagelink_paths_csv"],
+            name="export_pagelink_to_csv",
+            tags=["pagelink", "export"]
+        ),
+        node(
+            func=export_pagelink_to_json,
+            inputs="pagelink_analysis",
+            outputs=["pagelink_important_edges_json", "pagelink_paths_json"],
+            name="export_pagelink_to_json",
+            tags=["pagelink", "export"]
+        ),
+    ])

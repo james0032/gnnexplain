@@ -15,6 +15,19 @@ id_to_name_map:
   type: pickle.PickleDataset
   filepath: data/01_raw/id_to_name.map
 
+# Dictionary files for human-readable name mapping
+node_dict_text:
+  type: text.TextDataset
+  filepath: data/01_raw/node_dict
+
+node_name_dict_text:
+  type: text.TextDataset
+  filepath: data/01_raw/node_name_dict.txt
+
+rel_dict_text:
+  type: text.TextDataset
+  filepath: data/01_raw/rel_dict
+
 # =============================================================================
 # Intermediate Data (02_intermediate)
 # =============================================================================
@@ -111,6 +124,27 @@ pagelink_explanations:
 explanation_summary:
   type: pickle.PickleDataset
   filepath: data/05_model_explanations/explanation_summary.pkl
+
+# PaGE-Link analysis outputs (human-readable)
+pagelink_analysis:
+  type: pickle.PickleDataset
+  filepath: data/05_model_explanations/pagelink_analysis.pkl
+
+pagelink_important_edges_csv:
+  type: pandas.CSVDataset
+  filepath: data/08_reporting/pagelink_important_edges.csv
+
+pagelink_paths_csv:
+  type: pandas.CSVDataset
+  filepath: data/08_reporting/pagelink_paths.csv
+
+pagelink_important_edges_json:
+  type: json.JSONDataset
+  filepath: data/08_reporting/pagelink_important_edges.json
+
+pagelink_paths_json:
+  type: json.JSONDataset
+  filepath: data/08_reporting/pagelink_paths.json
 
 # =============================================================================
 # Model Outputs (07_model_output)

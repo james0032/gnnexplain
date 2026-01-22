@@ -2039,3 +2039,394 @@ def summarize_explanations(
         print(f"\nAverage overlap in top-5 important edges: {avg_overlap:.2f}")
 
     return summary
+
+
+def analyze_pagelink_results(
+    pagelink_explanations: Dict,
+    node_dict: str,
+    node_name_dict: str,
+    rel_dict: str,
+    edge_map: Dict
+) -> Dict:
+    """
+    Analyze PaGE-Link results and create human-readable output files.
+
+    This function processes the raw PaGE-Link explanations and creates:
+    1. A file with top important edges for each test triple (human-readable names)
+    2. A file with top paths and their scores for each test triple
+
+    Args:
+        pagelink_explanations: Dictionary containing PaGE-Link explanation results
+        node_dict: Content of node_dict file (format: "CHEBI:100000"\t0)
+        node_name_dict: Content of node_name_dict.txt (format: Warfarin\t0)
+        rel_dict: Content of rel_dict file (format: "predicate:0"\t0)
+        edge_map: Dictionary mapping edge properties to predicate names
+
+    Returns:
+        Dictionary containing:
+        - important_edges_by_triple: List of dicts with important edges per triple
+        - paths_by_triple: List of dicts with paths per triple
+        - summary_stats: Statistics about the analysis
+    """
+    import json
+
+    print("\n" + "=" * 80)
+    print("Analyzing PaGE-Link Results")
+    print("=" * 80)
+
+    # Parse node_dict: "CHEBI:100000" -> 0
+    idx_to_node_id = {}
+    for line in node_dict.strip().split('\n'):
+        if '\t' in line:
+            parts = line.strip().split('\t')
+            if len(parts) >= 2:
+                node_id = parts[0].strip('"')
+                idx = int(parts[1])
+                idx_to_node_id[idx] = node_id
+
+    print(f"  Loaded {len(idx_to_node_id):,} node ID mappings")
+
+    # Parse node_name_dict: Warfarin -> 0 (gives human-readable names)
+    idx_to_node_name = {}
+    for line in node_name_dict.strip().split('\n'):
+        if '\t' in line:
+            parts = line.strip().split('\t')
+            if len(parts) >= 2:
+                name = parts[0]
+                idx = int(parts[1])
+                idx_to_node_name[idx] = name
+
+    print(f"  Loaded {len(idx_to_node_name):,} node name mappings")
+
+    # Parse rel_dict: "predicate:0" -> 0
+    idx_to_rel_id = {}
+    for line in rel_dict.strip().split('\n'):
+        if '\t' in line:
+            parts = line.strip().split('\t')
+            if len(parts) >= 2:
+                rel_id = parts[0].strip('"')
+                idx = int(parts[1])
+                idx_to_rel_id[idx] = rel_id
+
+    print(f"  Loaded {len(idx_to_rel_id):,} relation ID mappings")
+
+    # Create reverse edge_map: predicate:X -> human-readable predicate name
+    rel_id_to_predicate = {}
+    for edge_props_json, rel_id in edge_map.items():
+        try:
+            edge_props = json.loads(edge_props_json)
+            predicate = edge_props.get('predicate', rel_id)
+            rel_id_to_predicate[rel_id] = predicate
+        except (json.JSONDecodeError, TypeError):
+            rel_id_to_predicate[rel_id] = rel_id
+
+    print(f"  Loaded {len(rel_id_to_predicate):,} predicate mappings")
+
+    def get_node_name(idx: int) -> str:
+        """Get human-readable name for a node index."""
+        # First try to get the human-readable name
+        if idx in idx_to_node_name:
+            return idx_to_node_name[idx]
+        # Fall back to node ID
+        if idx in idx_to_node_id:
+            return idx_to_node_id[idx]
+        return f"node_{idx}"
+
+    def get_relation_name(idx: int) -> str:
+        """Get human-readable name for a relation index."""
+        rel_id = idx_to_rel_id.get(idx, f"rel_{idx}")
+        # Convert predicate:X to human-readable predicate
+        return rel_id_to_predicate.get(rel_id, rel_id)
+
+    # Process explanations
+    explanations = pagelink_explanations.get('explanations', [])
+    num_explanations = len(explanations)
+
+    print(f"\n  Processing {num_explanations} explanations...")
+
+    important_edges_by_triple = []
+    paths_by_triple = []
+
+    for i, exp in enumerate(explanations):
+        triple_info = exp.get('triple', {})
+
+        # Get human-readable triple info
+        head_idx = triple_info.get('head_idx', -1)
+        tail_idx = triple_info.get('tail_idx', -1)
+        rel_idx = triple_info.get('relation_idx', -1)
+
+        head_name = get_node_name(head_idx)
+        tail_name = get_node_name(tail_idx)
+        rel_name = get_relation_name(rel_idx)
+
+        triple_str = f"({head_name}, {rel_name}, {tail_name})"
+
+        print(f"\n  [{i+1}/{num_explanations}] {triple_str}")
+
+        # Check for errors
+        if 'error' in exp:
+            print(f"      ERROR: {exp['error']}")
+            important_edges_by_triple.append({
+                'triple': triple_str,
+                'head': head_name,
+                'relation': rel_name,
+                'tail': tail_name,
+                'prediction_score': exp.get('prediction_score'),
+                'error': exp['error'],
+                'important_edges': []
+            })
+            paths_by_triple.append({
+                'triple': triple_str,
+                'head': head_name,
+                'relation': rel_name,
+                'tail': tail_name,
+                'prediction_score': exp.get('prediction_score'),
+                'error': exp['error'],
+                'paths': []
+            })
+            continue
+
+        prediction_score = exp.get('prediction_score')
+
+        # Process important edges
+        important_edges = exp.get('important_edges', [])
+        edges_list = []
+
+        if important_edges:
+            for edge_info in important_edges:
+                src_idx = edge_info['src']
+                dst_idx = edge_info['dst']
+                rel_idx_edge = edge_info['rel']
+                weight = edge_info['weight']
+
+                src_name = get_node_name(src_idx)
+                dst_name = get_node_name(dst_idx)
+                rel_name_edge = get_relation_name(rel_idx_edge)
+
+                edges_list.append({
+                    'source': src_name,
+                    'relation': rel_name_edge,
+                    'target': dst_name,
+                    'weight': weight
+                })
+
+        print(f"      Important edges: {len(edges_list)}")
+
+        important_edges_by_triple.append({
+            'triple': triple_str,
+            'head': head_name,
+            'relation': rel_name,
+            'tail': tail_name,
+            'prediction_score': prediction_score,
+            'important_edges': edges_list
+        })
+
+        # Process paths
+        paths = exp.get('paths', [])
+        paths_list = []
+
+        if paths:
+            for path in paths:
+                path_steps = []
+                path_score = 0.0
+
+                for step in path:
+                    if len(step) >= 3:
+                        src_idx, rel_idx_step, dst_idx = step[0], step[1], step[2]
+                        src_name = get_node_name(src_idx)
+                        dst_name = get_node_name(dst_idx)
+                        rel_name_step = get_relation_name(rel_idx_step)
+
+                        path_steps.append({
+                            'source': src_name,
+                            'relation': rel_name_step,
+                            'target': dst_name
+                        })
+
+                # Calculate path score from edge weights if available
+                # For now, use the edge mask values from important_edges
+                path_str = " -> ".join(
+                    f"{s['source']} --[{s['relation']}]--> {s['target']}"
+                    for s in path_steps
+                )
+
+                paths_list.append({
+                    'path_length': len(path_steps),
+                    'path_str': path_str,
+                    'steps': path_steps
+                })
+
+        print(f"      Paths found: {len(paths_list)}")
+
+        paths_by_triple.append({
+            'triple': triple_str,
+            'head': head_name,
+            'relation': rel_name,
+            'tail': tail_name,
+            'prediction_score': prediction_score,
+            'num_paths': len(paths_list),
+            'paths': paths_list
+        })
+
+    # Compute summary statistics
+    successful_explanations = sum(1 for e in important_edges_by_triple if 'error' not in e)
+    total_edges = sum(len(e.get('important_edges', [])) for e in important_edges_by_triple)
+    total_paths = sum(p.get('num_paths', 0) for p in paths_by_triple)
+
+    summary_stats = {
+        'total_explanations': num_explanations,
+        'successful_explanations': successful_explanations,
+        'failed_explanations': num_explanations - successful_explanations,
+        'total_important_edges': total_edges,
+        'total_paths': total_paths,
+        'avg_edges_per_triple': total_edges / successful_explanations if successful_explanations > 0 else 0,
+        'avg_paths_per_triple': total_paths / successful_explanations if successful_explanations > 0 else 0
+    }
+
+    print(f"\n" + "=" * 80)
+    print("Analysis Complete")
+    print("=" * 80)
+    print(f"  Total explanations: {num_explanations}")
+    print(f"  Successful: {successful_explanations}")
+    print(f"  Failed: {num_explanations - successful_explanations}")
+    print(f"  Total important edges: {total_edges:,}")
+    print(f"  Total paths: {total_paths:,}")
+    print(f"  Avg edges per triple: {summary_stats['avg_edges_per_triple']:.1f}")
+    print(f"  Avg paths per triple: {summary_stats['avg_paths_per_triple']:.1f}")
+
+    return {
+        'important_edges_by_triple': important_edges_by_triple,
+        'paths_by_triple': paths_by_triple,
+        'summary_stats': summary_stats
+    }
+
+
+def export_pagelink_to_csv(
+    pagelink_analysis: Dict
+) -> Tuple[Dict, Dict]:
+    """
+    Export PaGE-Link analysis results to CSV-compatible format.
+
+    Args:
+        pagelink_analysis: Output from analyze_pagelink_results
+
+    Returns:
+        Tuple of (important_edges_df_dict, paths_df_dict) for pandas CSVDataset
+    """
+    import pandas as pd
+
+    print("\nExporting PaGE-Link results to CSV format...")
+
+    # Create important edges DataFrame
+    edges_rows = []
+    for triple_data in pagelink_analysis['important_edges_by_triple']:
+        triple_str = triple_data['triple']
+        head = triple_data['head']
+        relation = triple_data['relation']
+        tail = triple_data['tail']
+        pred_score = triple_data.get('prediction_score')
+
+        if 'error' in triple_data:
+            edges_rows.append({
+                'test_triple': triple_str,
+                'test_head': head,
+                'test_relation': relation,
+                'test_tail': tail,
+                'prediction_score': pred_score,
+                'edge_rank': None,
+                'edge_source': None,
+                'edge_relation': None,
+                'edge_target': None,
+                'edge_weight': None,
+                'error': triple_data['error']
+            })
+        else:
+            for rank, edge in enumerate(triple_data.get('important_edges', []), 1):
+                edges_rows.append({
+                    'test_triple': triple_str,
+                    'test_head': head,
+                    'test_relation': relation,
+                    'test_tail': tail,
+                    'prediction_score': pred_score,
+                    'edge_rank': rank,
+                    'edge_source': edge['source'],
+                    'edge_relation': edge['relation'],
+                    'edge_target': edge['target'],
+                    'edge_weight': edge['weight'],
+                    'error': None
+                })
+
+    edges_df = pd.DataFrame(edges_rows)
+    print(f"  Important edges CSV: {len(edges_df)} rows")
+
+    # Create paths DataFrame
+    paths_rows = []
+    for triple_data in pagelink_analysis['paths_by_triple']:
+        triple_str = triple_data['triple']
+        head = triple_data['head']
+        relation = triple_data['relation']
+        tail = triple_data['tail']
+        pred_score = triple_data.get('prediction_score')
+
+        if 'error' in triple_data:
+            paths_rows.append({
+                'test_triple': triple_str,
+                'test_head': head,
+                'test_relation': relation,
+                'test_tail': tail,
+                'prediction_score': pred_score,
+                'path_rank': None,
+                'path_length': None,
+                'path': None,
+                'error': triple_data['error']
+            })
+        else:
+            for rank, path_info in enumerate(triple_data.get('paths', []), 1):
+                paths_rows.append({
+                    'test_triple': triple_str,
+                    'test_head': head,
+                    'test_relation': relation,
+                    'test_tail': tail,
+                    'prediction_score': pred_score,
+                    'path_rank': rank,
+                    'path_length': path_info['path_length'],
+                    'path': path_info['path_str'],
+                    'error': None
+                })
+
+    paths_df = pd.DataFrame(paths_rows)
+    print(f"  Paths CSV: {len(paths_df)} rows")
+
+    return edges_df, paths_df
+
+
+def export_pagelink_to_json(
+    pagelink_analysis: Dict
+) -> Tuple[Dict, Dict]:
+    """
+    Export PaGE-Link analysis results to JSON format.
+
+    Args:
+        pagelink_analysis: Output from analyze_pagelink_results
+
+    Returns:
+        Tuple of (important_edges_json, paths_json)
+    """
+    print("\nExporting PaGE-Link results to JSON format...")
+
+    important_edges_json = {
+        'description': 'PaGE-Link important edges for each test triple',
+        'summary': pagelink_analysis['summary_stats'],
+        'triples': pagelink_analysis['important_edges_by_triple']
+    }
+
+    paths_json = {
+        'description': 'PaGE-Link explanation paths for each test triple',
+        'summary': pagelink_analysis['summary_stats'],
+        'triples': pagelink_analysis['paths_by_triple']
+    }
+
+    print(f"  Important edges JSON: {len(pagelink_analysis['important_edges_by_triple'])} triples")
+    print(f"  Paths JSON: {len(pagelink_analysis['paths_by_triple'])} triples")
+
+    return important_edges_json, paths_json

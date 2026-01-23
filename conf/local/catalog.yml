@@ -89,11 +89,11 @@ test_triple_scores:
 
 test_triple_scores_csv:
   type: pandas.CSVDataset
-  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_clean_baseline/data/07_model_output/scores_test_top50_conve.txt
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_clean_baseline/data/07_model_output/test_triple_scores.csv
 
 top10_test:
   type: text.TextDataset
-  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_clean_baseline/data/07_model_output/topk_test.txt
+  filepath: /projects/aixb/jchung/everycure/influence_estimate/robokop/gnn_clean_baseline/data/07_model_output/scores_test_top50_conve.txt
 
 accuracy_metric:
   type: pickle.PickleDataset

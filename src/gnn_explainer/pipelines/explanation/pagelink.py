@@ -480,6 +480,7 @@ class PaGELinkExplainer(nn.Module):
         tail_idx: int,
         rel_idx: int,
         max_path_length: int = 3,
+        top_k_edges: int = 100,
         verbose: bool = False
     ) -> Dict:
         """
@@ -490,6 +491,7 @@ class PaGELinkExplainer(nn.Module):
             tail_idx: Tail node index
             rel_idx: Relation type index
             max_path_length: Maximum path length for subgraph extraction and path finding
+            top_k_edges: Number of top important edges to return
             verbose: Print progress
 
         Returns:
@@ -601,7 +603,7 @@ class PaGELinkExplainer(nn.Module):
             global_paths.append(global_path)
 
         # Get top-k important edges
-        top_k = min(10, num_edges)
+        top_k = min(top_k_edges, num_edges)
         top_k_values, top_k_indices = torch.topk(edge_weights, top_k)
 
         important_edges = []
@@ -709,6 +711,7 @@ def run_pagelink_explainer(
     beta = pagelink_params.get('beta', 0.1)
     k_paths = pagelink_params.get('k_paths', 5)
     max_path_length = pagelink_params.get('max_path_length', 3)  # Default 3 for path-based extraction
+    top_k_edges = pagelink_params.get('top_k_edges', 100)  # Number of important edges to return
 
     print(f"\nPaGE-Link Parameters:")
     print(f"  Learning rate: {lr}")
@@ -717,6 +720,7 @@ def run_pagelink_explainer(
     print(f"  Beta (size regularization): {beta}")
     print(f"  K paths to extract: {k_paths}")
     print(f"  Max path length (subgraph): {max_path_length}")
+    print(f"  Top-k edges to return: {top_k_edges}")
     print(f"  Exclude inverse edges: {exclude_inverse_edges}")
 
     # Create explainer
@@ -766,6 +770,7 @@ def run_pagelink_explainer(
                 tail_idx=tail_idx,
                 rel_idx=rel_idx,
                 max_path_length=max_path_length,
+                top_k_edges=top_k_edges,
                 verbose=True
             )
 

@@ -132,7 +132,7 @@ explanation:
   # PaGE-Link parameters (Path-based GNN Explanation for heterogeneous Link prediction)
   # Based on: https://github.com/amazon-science/page-link-path-based-gnn-explanation
   pagelink:
-    num_epochs: 100                         # Optimization epochs for edge mask learning
+    num_epochs: 600                         # Optimization epochs for edge mask learning, after 600 loss has effectively plateaued
     lr: 0.01                                # Learning rate for edge mask optimization
     alpha: 1.0                              # Weight for prediction preservation loss
     beta: 0.1                               # Weight for edge mask sparsity regularization

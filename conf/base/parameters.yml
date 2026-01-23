@@ -74,7 +74,7 @@ explanation:
   enabled_explainers: ["pagelink"]
   # Triple selection parameters
   triple_selection:
-    strategy: "test_triples"              # Options: "random", "test_triples", "from_file", "specific_relations", "specific_nodes"
+    strategy: "from_file"              # Options: "random", "test_triples", "from_file", "specific_relations", "specific_nodes"
                                           # - "random": randomly select from training graph edges
                                           # - "test_triples": randomly select from test set triples
                                           # - "from_file": load triples from a file (e.g., topk_test.txt)
@@ -138,7 +138,7 @@ explanation:
     beta: 0.1                               # Weight for edge mask sparsity regularization
     k_paths: 20                             # Number of top paths to extract
     max_path_length: 3                      # Max path length for subgraph extraction (only edges on paths <= N)
-    top_k_edges: 100                        # Number of top important edges to extract
+    top_k_edges: 1000                        # Number of top important edges to extract
     checkpoint_dir: "data/06_explainer_cache"  # Directory for PaGE-Link checkpoints
 
   # Legacy explanation settings (for old explanation pipeline)

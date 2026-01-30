@@ -32,7 +32,7 @@ model:
   num_bases: 30                  # Number of bases (RGCN only)
 
   # CompGCN-specific parameters
-  comp_fn: "sub"                 # Composition function: "sub", "mult", "corr"
+  comp_fn: "corr"                 # Composition function: "sub", "mult", "corr"
 
   # ConvE-specific parameters (only used when decoder_type="conve")
   conve_input_drop: 0.2          # Input dropout

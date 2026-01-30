@@ -355,7 +355,7 @@ class PaGELinkExplainer(nn.Module):
         tail_local: int,
         max_length: int = 4,
         top_k: int = 5
-    ) -> List[List[Tuple[int, int, int, int]]]:
+    ) -> List[Tuple[float, List[Tuple[int, int, int, int]]]]:
         """
         Find k-shortest paths using BFS with edge weights.
 
@@ -366,7 +366,10 @@ class PaGELinkExplainer(nn.Module):
             max_length: Maximum path length
             top_k: Number of paths to find
 
-        Returns list of paths, where each path is a list of (src, rel, dst, edge_idx) tuples.
+        Returns list of (path_score, path) tuples, where path_score is the mean
+        of sigmoid edge mask weights along the path (in range (0, 1), comparable
+        across different path lengths), and each path is a list of
+        (src, rel, dst, edge_idx) tuples. Sorted descending by path_score.
         """
         from heapq import heappush, heappop
 
@@ -403,11 +406,17 @@ class PaGELinkExplainer(nn.Module):
                     new_score = score + weight
                     heappush(pq, (-new_score, length + 1, neighbor, new_path))
 
-        # Convert to output format (keep edge_idx for fast lookup later)
+        # Convert sum to mean edge weight so scores are in (0, 1),
+        # making paths of different lengths comparable.
+        # Note: BFS uses sum for exploration (can't know final length mid-search),
+        # so we re-sort by mean here. This means the top-k by mean may differ
+        # from top-k by sum, but mean is the fairer comparison metric.
         result_paths = []
-        for score, path in sorted(found_paths, key=lambda x: -x[0]):
-            result_paths.append(path)  # Keep full tuple including edge_idx
+        for score, path in found_paths:
+            mean_score = score / len(path) if path else 0.0
+            result_paths.append((mean_score, path))
 
+        result_paths.sort(key=lambda x: -x[0])
         return result_paths[:top_k]
 
     def _path_loss(
@@ -447,7 +456,7 @@ class PaGELinkExplainer(nn.Module):
 
         # Collect edge indices on paths - O(1) lookup since paths now include edge_idx
         edges_on_paths = set()
-        for path in paths:
+        for _score, path in paths:
             for (src, rel, dst, edge_idx) in path:
                 edges_on_paths.add(edge_idx)
 
@@ -584,7 +593,7 @@ class PaGELinkExplainer(nn.Module):
         edge_weights = torch.sigmoid(edge_mask)
 
         # Extract final paths (using cached adjacency)
-        paths = self._find_paths_bfs(
+        scored_paths = self._find_paths_bfs(
             adj_data, edge_weights,
             head_local, tail_local,
             max_length=max_path_length,
@@ -594,13 +603,15 @@ class PaGELinkExplainer(nn.Module):
         # Convert paths back to global indices
         # New path format: (src_local, rel, dst_local, edge_idx)
         global_paths = []
-        for path in paths:
+        path_scores = []
+        for path_score, path in scored_paths:
             global_path = []
             for src_local, rel, dst_local, edge_idx in path:
                 src_global = subset[src_local].item()
                 dst_global = subset[dst_local].item()
                 global_path.append((src_global, rel, dst_global))
             global_paths.append(global_path)
+            path_scores.append(path_score)
 
         # Get top-k important edges
         top_k = min(top_k_edges, num_edges)
@@ -629,6 +640,7 @@ class PaGELinkExplainer(nn.Module):
             },
             'prediction_score': original_score,
             'paths': global_paths,
+            'path_scores': path_scores,
             'edge_mask': edge_weights.cpu(),
             'important_edges': important_edges,
             'subgraph_info': {

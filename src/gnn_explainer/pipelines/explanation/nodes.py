@@ -2223,12 +2223,12 @@ def analyze_pagelink_results(
 
         # Process paths
         paths = exp.get('paths', [])
+        path_scores = exp.get('path_scores', [])
         paths_list = []
 
         if paths:
-            for path in paths:
+            for path_idx, path in enumerate(paths):
                 path_steps = []
-                path_score = 0.0
 
                 for step in path:
                     if len(step) >= 3:
@@ -2243,8 +2243,10 @@ def analyze_pagelink_results(
                             'target': dst_name
                         })
 
-                # Calculate path score from edge weights if available
-                # For now, use the edge mask values from important_edges
+                # Path score = mean of sigmoid(edge_mask) weights along the path
+                # Normalized to (0, 1) so paths of different lengths are comparable
+                path_score = path_scores[path_idx] if path_idx < len(path_scores) else None
+
                 path_str = " -> ".join(
                     f"{s['source']} --[{s['relation']}]--> {s['target']}"
                     for s in path_steps
@@ -2252,6 +2254,7 @@ def analyze_pagelink_results(
 
                 paths_list.append({
                     'path_length': len(path_steps),
+                    'path_score': path_score,
                     'path_str': path_str,
                     'steps': path_steps
                 })
@@ -2376,6 +2379,7 @@ def export_pagelink_to_csv(
                 'test_tail': tail,
                 'prediction_score': pred_score,
                 'path_rank': None,
+                'path_score': None,
                 'path_length': None,
                 'path': None,
                 'error': triple_data['error']
@@ -2389,6 +2393,7 @@ def export_pagelink_to_csv(
                     'test_tail': tail,
                     'prediction_score': pred_score,
                     'path_rank': rank,
+                    'path_score': path_info.get('path_score'),
                     'path_length': path_info['path_length'],
                     'path': path_info['path_str'],
                     'error': None

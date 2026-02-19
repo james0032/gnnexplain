@@ -90,7 +90,7 @@ def train_model(
         # Choose DGL or PyG model
         ModelClass = CompGCNKGModelDGL if use_dgl else CompGCNKGModel
 
-        model = ModelClass(
+        model_kwargs = dict(
             num_nodes=knowledge_graph['num_nodes'],
             num_relations=knowledge_graph['num_relations'],
             embedding_dim=model_params['embedding_dim'],
@@ -98,8 +98,13 @@ def train_model(
             num_layers=model_params['num_layers'],
             comp_fn=model_params.get('comp_fn', 'sub'),
             dropout=model_params['dropout'],
-            conve_kwargs=conve_kwargs if conve_kwargs else None
-        ).to(device)
+            conve_kwargs=conve_kwargs if conve_kwargs else None,
+        )
+        if not use_dgl:
+            # Gradient checkpointing for PyG encoder (bounds GPU memory)
+            model_kwargs['use_checkpoint'] = True
+
+        model = ModelClass(**model_kwargs).to(device)
 
     elif model_type == 'rgcn':
         # Original RGCN + DistMult
@@ -126,12 +131,11 @@ def train_model(
         log_params_from_dict(model_params, prefix="model")
         log_params_from_dict(training_params, prefix="training")
 
-    # Optimizer
-    optimizer = optim.Adam(
-        model.parameters(),
-        lr=training_params['learning_rate'],
-        weight_decay=training_params.get('weight_decay', 0.0)
-    )
+    # Separate optimizers for encoder (stepped once/epoch) and decoder (stepped per batch)
+    lr = training_params['learning_rate']
+    wd = training_params.get('weight_decay', 0.0)
+    enc_optimizer = optim.Adam(model.encoder.parameters(), lr=lr, weight_decay=wd)
+    dec_optimizer = optim.Adam(model.decoder.parameters(), lr=lr, weight_decay=wd)
 
     # Move graph data to device
     if use_dgl:
@@ -208,7 +212,12 @@ def train_model(
             # Support both old format ('model_state_dict') and new format ('current_model_state_dict')
             current_state = checkpoint.get('current_model_state_dict', checkpoint.get('model_state_dict'))
             model.load_state_dict(current_state)
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            if 'enc_optimizer_state_dict' in checkpoint:
+                enc_optimizer.load_state_dict(checkpoint['enc_optimizer_state_dict'])
+                dec_optimizer.load_state_dict(checkpoint['dec_optimizer_state_dict'])
+            else:
+                # Legacy single-optimizer checkpoint — skip optimizer restore
+                print("  (Legacy checkpoint: optimizer state skipped)")
             start_epoch = checkpoint['epoch'] + 1
             best_val_loss = checkpoint.get('best_val_loss', float('inf'))
             best_model_state = checkpoint.get('best_model_state', None)
@@ -244,38 +253,36 @@ def train_model(
         all_triples = all_triples[perm]
         labels = labels[perm]
 
-        # === Memory-efficient training: encode with no_grad, decode per batch ===
-        # The CompGCN encoder processes ALL edges, creating O(num_edges * dim)
-        # intermediate activations per layer. With ~960K nodes and millions of
-        # edges, storing these for backprop exceeds 40GB GPU memory.
+        # === Two-phase training with gradient checkpointing ===
         #
-        # Strategy: encode with no_grad (no encoder activations stored), then
-        # train decoder parameters per batch. Encoder parameters (node_emb,
-        # rel_emb, layer weights) are updated via straight-through estimation:
-        # we compute decoder loss, backprop to the embeddings, then manually
-        # propagate gradients to the encoder's learnable parameters.
+        # Phase 1 (decoder): Encode once with no_grad. For each mini-batch,
+        #   compute decoder loss, backward, step decoder optimizer — so
+        #   decoder params (ConvE) get updated at full learning rate every
+        #   batch. Embedding gradients accumulate across all batches.
+        #
+        # Phase 2 (encoder): Re-run encode WITH grad (using checkpointing
+        #   to bound memory), backward using accumulated embedding gradients.
+        #   Step encoder optimizer once per epoch.
 
-        # 1. Encode full graph WITHOUT storing activations
+        # Phase 1: Encode once, decode per batch
         with torch.no_grad():
             if use_dgl:
                 node_emb, rel_emb = model.encode(g=g)
             else:
                 node_emb, rel_emb = model.encode(edge_index, edge_type)
 
-        # Enable grad on embeddings so decoder backward flows to them
-        node_emb = node_emb.detach().requires_grad_(True)
-        rel_emb = rel_emb.detach().requires_grad_(True)
+        node_emb_leaf = node_emb.detach().requires_grad_(True)
+        rel_emb_leaf = rel_emb.detach().requires_grad_(True)
 
-        # 2. Mini-batch decode — only decoder params in the compute graph
         total_batches = (len(all_triples) + batch_size - 1) // batch_size
         for batch_idx, i in enumerate(range(0, len(all_triples), batch_size), 1):
             batch_triples = all_triples[i:i+batch_size].to(device)
             batch_labels = labels[i:i+batch_size]
 
-            optimizer.zero_grad()
+            dec_optimizer.zero_grad()
 
             scores = model.decode(
-                node_emb, rel_emb,
+                node_emb_leaf, rel_emb_leaf,
                 batch_triples[:, 0],
                 batch_triples[:, 2],
                 batch_triples[:, 1]
@@ -284,25 +291,10 @@ def train_model(
             loss = F.binary_cross_entropy_with_logits(scores, batch_labels)
             loss.backward()
 
-            # Manually propagate embedding gradients to encoder's base parameters.
-            # node_emb came from encoder.node_emb via convolutions, but since we
-            # detached, we use the embedding gradients as a proxy to update the
-            # encoder's initial embedding parameters directly.
-            if node_emb.grad is not None:
-                if model.encoder.node_emb.grad is None:
-                    model.encoder.node_emb.grad = torch.zeros_like(model.encoder.node_emb)
-                model.encoder.node_emb.grad += node_emb.grad
-                node_emb.grad = None  # Reset for next batch accumulation
-            if rel_emb.grad is not None:
-                if model.encoder.rel_emb.grad is None:
-                    model.encoder.rel_emb.grad = torch.zeros_like(model.encoder.rel_emb)
-                model.encoder.rel_emb.grad += rel_emb.grad
-                rel_emb.grad = None
-
+            # Step decoder only; embedding leaf grads accumulate
             if gradient_clip:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip)
-
-            optimizer.step()
+                torch.nn.utils.clip_grad_norm_(model.decoder.parameters(), gradient_clip)
+            dec_optimizer.step()
 
             total_loss += loss.item()
             num_batches += 1
@@ -312,6 +304,32 @@ def train_model(
                 msg = f"  Epoch {epoch+1}/{num_epochs} - Batch {batch_idx}/{total_batches} - Avg Loss: {avg_loss:.4f}"
                 logger.info(msg)
                 print(msg, flush=True)
+
+        # Phase 2: Backward through encoder with gradient checkpointing
+        # Average the accumulated embedding gradients across batches
+        if node_emb_leaf.grad is not None:
+            node_emb_leaf.grad.div_(total_batches)
+        if rel_emb_leaf.grad is not None:
+            rel_emb_leaf.grad.div_(total_batches)
+
+        if node_emb_leaf.grad is not None or rel_emb_leaf.grad is not None:
+            enc_optimizer.zero_grad()
+
+            if use_dgl:
+                node_emb_ckpt, rel_emb_ckpt = model.encode(g=g)
+            else:
+                node_emb_ckpt, rel_emb_ckpt = model.encode(edge_index, edge_type)
+
+            node_grad = node_emb_leaf.grad if node_emb_leaf.grad is not None else torch.zeros_like(node_emb_ckpt)
+            rel_grad = rel_emb_leaf.grad if rel_emb_leaf.grad is not None else torch.zeros_like(rel_emb_ckpt)
+            torch.autograd.backward(
+                [node_emb_ckpt, rel_emb_ckpt],
+                [node_grad, rel_grad]
+            )
+
+            if gradient_clip:
+                torch.nn.utils.clip_grad_norm_(model.encoder.parameters(), gradient_clip)
+            enc_optimizer.step()
 
         train_loss = total_loss / num_batches
 
@@ -402,7 +420,8 @@ def train_model(
             checkpoint = {
                 'epoch': epoch,
                 'current_model_state_dict': model.state_dict(),  # Current state for resume
-                'optimizer_state_dict': optimizer.state_dict(),
+                'enc_optimizer_state_dict': enc_optimizer.state_dict(),
+                'dec_optimizer_state_dict': dec_optimizer.state_dict(),
                 'best_val_loss': best_val_loss,
                 'best_model_state': best_model_state,
                 'patience_counter': patience_counter,

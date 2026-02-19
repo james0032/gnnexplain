@@ -115,6 +115,7 @@ class ConvE(nn.Module):
         head_emb: torch.Tensor,
         rel_emb: torch.Tensor,
         tail_emb: Optional[torch.Tensor] = None,
+        tail_idx: Optional[torch.Tensor] = None,
         all_node_emb: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """
@@ -124,6 +125,7 @@ class ConvE(nn.Module):
             head_emb: Head entity embeddings (batch_size, embedding_dim)
             rel_emb: Relation embeddings (batch_size, embedding_dim)
             tail_emb: Tail entity embeddings (batch_size, embedding_dim) or None
+            tail_idx: Tail entity indices (batch_size,) for per-entity bias lookup
             all_node_emb: All node embeddings (num_nodes, embedding_dim) for scoring
 
         Returns:
@@ -158,12 +160,14 @@ class ConvE(nn.Module):
         x = F.relu(x)
 
         if tail_emb is not None:
-            # Score specific triples: x · tail
-            scores = torch.sum(x * tail_emb, dim=1) + self.bias[torch.arange(batch_size)]
+            # Score specific triples: x · tail + per-entity bias
+            scores = torch.sum(x * tail_emb, dim=1)
+            if tail_idx is not None:
+                scores = scores + self.bias[tail_idx]
         elif all_node_emb is not None:
-            # Score against all entities: x · all_nodes^T
+            # Score against all entities: x · all_nodes^T + bias
             scores = torch.mm(x, all_node_emb.t())
-            scores = scores + self.bias.expand_as(scores)
+            scores = scores + self.bias.unsqueeze(0)
         else:
             raise ValueError("Either tail_emb or all_node_emb must be provided")
 

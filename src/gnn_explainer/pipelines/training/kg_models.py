@@ -46,7 +46,8 @@ class CompGCNKGModel(nn.Module):
         num_layers: int = 2,
         comp_fn: str = 'sub',
         dropout: float = 0.2,
-        conve_kwargs: Optional[Dict] = None
+        conve_kwargs: Optional[Dict] = None,
+        use_checkpoint: bool = False
     ):
         super().__init__()
 
@@ -62,7 +63,8 @@ class CompGCNKGModel(nn.Module):
             embedding_dim=embedding_dim,
             num_layers=num_layers,
             comp_fn=comp_fn,
-            dropout=dropout
+            dropout=dropout,
+            use_checkpoint=use_checkpoint
         )
 
         # Initialize decoder based on type
@@ -138,7 +140,7 @@ class CompGCNKGModel(nn.Module):
             tail_emb = node_emb[tail_idx]
             rel_emb_batch = rel_emb[rel_idx]
 
-            scores = self.decoder(head_emb, rel_emb_batch, tail_emb)
+            scores = self.decoder(head_emb, rel_emb_batch, tail_emb, tail_idx=tail_idx)
 
         else:
             # PyG decoders (DistMult, ComplEx, RotatE) use indices

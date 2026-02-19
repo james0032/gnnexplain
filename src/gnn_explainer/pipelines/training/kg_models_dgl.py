@@ -130,7 +130,7 @@ class CompGCNKGModelDGL(nn.Module):
             tail_emb = node_emb[tail_idx]
             rel_emb_batch = rel_emb[rel_idx]
 
-            scores = self.decoder(head_emb, rel_emb_batch, tail_emb)
+            scores = self.decoder(head_emb, rel_emb_batch, tail_emb, tail_idx=tail_idx)
 
         elif self.decoder_type == 'distmult':
             # DistMult: <h, r, t> = sum(h * r * t)

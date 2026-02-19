@@ -7,6 +7,7 @@ Learns both node and relation embeddings jointly using composition operations.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 from .compgcn_layer import CompGCNConv
 
 
@@ -35,7 +36,8 @@ class CompGCNEncoder(nn.Module):
         num_layers: int = 2,
         comp_fn: str = 'sub',
         dropout: float = 0.2,
-        aggr: str = 'add'
+        aggr: str = 'add',
+        use_checkpoint: bool = False
     ):
         super().__init__()
 
@@ -44,6 +46,7 @@ class CompGCNEncoder(nn.Module):
         self.embedding_dim = embedding_dim
         self.num_layers = num_layers
         self.comp_fn = comp_fn
+        self.use_checkpoint = use_checkpoint
 
         # Initial node embeddings
         self.node_emb = nn.Parameter(
@@ -101,7 +104,16 @@ class CompGCNEncoder(nn.Module):
 
         # Pass through CompGCN layers
         for i, conv in enumerate(self.convs):
-            x, rel = conv(x, edge_index, edge_type, rel, edge_weight=edge_weight)
+            if self.use_checkpoint and self.training and torch.is_grad_enabled():
+                # Gradient checkpointing: recompute this layer's forward
+                # during backward instead of storing all intermediate
+                # activations. Trades ~2x compute for ~0 activation memory.
+                x, rel = checkpoint(
+                    conv, x, edge_index, edge_type, rel, edge_weight,
+                    use_reentrant=False
+                )
+            else:
+                x, rel = conv(x, edge_index, edge_type, rel, edge_weight=edge_weight)
 
             # Apply activation and dropout (except last layer)
             if i < len(self.convs) - 1:

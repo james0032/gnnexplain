@@ -244,47 +244,66 @@ def train_model(
         all_triples = all_triples[perm]
         labels = labels[perm]
 
-        # Mini-batch training
+        # === Memory-efficient training: encode once, decode per batch ===
+        # The CompGCN encoder processes ALL edges, creating O(num_edges * dim)
+        # intermediate activations. Running encode() per batch would store these
+        # activations for each batch's backward pass, easily exceeding GPU memory.
+        #
+        # Strategy: encode once with grad, detach embeddings for batched decoding,
+        # accumulate grad on the detached embeddings, then backprop through encoder
+        # once at the end using the accumulated embedding gradients.
+
+        optimizer.zero_grad()
+
+        # 1. Encode full graph (stores activations for one backward pass)
+        if use_dgl:
+            node_emb, rel_emb = model.encode(g=g)
+        else:
+            node_emb, rel_emb = model.encode(edge_index, edge_type)
+
+        # 2. Detach embeddings for mini-batch decoding
+        node_emb_d = node_emb.detach().requires_grad_(True)
+        rel_emb_d = rel_emb.detach().requires_grad_(True)
+
+        # 3. Mini-batch decode and accumulate embedding gradients
         total_batches = (len(all_triples) + batch_size - 1) // batch_size
         for batch_idx, i in enumerate(range(0, len(all_triples), batch_size), 1):
             batch_triples = all_triples[i:i+batch_size].to(device)
             batch_labels = labels[i:i+batch_size]
 
-            optimizer.zero_grad()
+            # Decode batch (only decoder params + detached embeddings in graph)
+            scores = model.decode(
+                node_emb_d, rel_emb_d,
+                batch_triples[:, 0],
+                batch_triples[:, 2],
+                batch_triples[:, 1]
+            )
 
-            # Forward pass (DGL or PyG)
-            if use_dgl:
-                scores = model(
-                    g=g,
-                    head_idx=batch_triples[:, 0],
-                    tail_idx=batch_triples[:, 2],
-                    rel_idx=batch_triples[:, 1]
-                )
-            else:
-                scores = model(
-                    edge_index, edge_type,
-                    batch_triples[:, 0],
-                    batch_triples[:, 2],
-                    batch_triples[:, 1]
-                )
+            batch_loss = F.binary_cross_entropy_with_logits(scores, batch_labels)
+            # Scale loss by batch fraction so accumulated grads match full-epoch grad
+            batch_loss = batch_loss * (len(batch_triples) / len(all_triples))
+            batch_loss.backward()
 
-            loss = F.binary_cross_entropy_with_logits(scores, batch_labels)
-            loss.backward()
-
-            if gradient_clip:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip)
-
-            optimizer.step()
-
-            total_loss += loss.item()
+            total_loss += batch_loss.item() * (len(all_triples) / len(batch_triples))
             num_batches += 1
 
-            # Print batch progress every 10 batches or on last batch
             if batch_idx % 10 == 0 or batch_idx == total_batches:
                 avg_loss = total_loss / num_batches
                 msg = f"  Epoch {epoch+1}/{num_epochs} - Batch {batch_idx}/{total_batches} - Avg Loss: {avg_loss:.4f}"
                 logger.info(msg)
-                print(msg, flush=True)  # Also print to ensure visibility
+                print(msg, flush=True)
+
+        # 4. Backprop through encoder using accumulated embedding gradients
+        # node_emb_d.grad and rel_emb_d.grad now contain the sum of decoder gradients
+        if node_emb_d.grad is not None:
+            node_emb.backward(node_emb_d.grad, retain_graph=True)
+        if rel_emb_d.grad is not None:
+            rel_emb.backward(rel_emb_d.grad)
+
+        if gradient_clip:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip)
+
+        optimizer.step()
 
         train_loss = total_loss / num_batches
 
@@ -307,25 +326,22 @@ def train_model(
                 torch.zeros(len(val_neg_triples))
             ]).to(device)
 
+            # Encode once for validation
+            if use_dgl:
+                val_node_emb, val_rel_emb = model.encode(g=g)
+            else:
+                val_node_emb, val_rel_emb = model.encode(edge_index, edge_type)
+
             for i in range(0, len(val_all_triples), batch_size):
                 batch_triples = val_all_triples[i:i+batch_size].to(device)
                 batch_labels = val_labels[i:i+batch_size]
 
-                # Forward pass (DGL or PyG)
-                if use_dgl:
-                    scores = model(
-                        g=g,
-                        head_idx=batch_triples[:, 0],
-                        tail_idx=batch_triples[:, 2],
-                        rel_idx=batch_triples[:, 1]
-                    )
-                else:
-                    scores = model(
-                        edge_index, edge_type,
-                        batch_triples[:, 0],
-                        batch_triples[:, 2],
-                        batch_triples[:, 1]
-                    )
+                scores = model.decode(
+                    val_node_emb, val_rel_emb,
+                    batch_triples[:, 0],
+                    batch_triples[:, 2],
+                    batch_triples[:, 1]
+                )
 
                 loss = F.binary_cross_entropy_with_logits(scores, batch_labels)
                 val_loss += loss.item()

@@ -196,13 +196,13 @@ class CompGCNConv(nn.Module):
                 msg = msg * chunk_weight.unsqueeze(-1)
 
             # Scatter-add messages to destination nodes
-            scatter_add(msg, chunk_dst, dim=0, out=out)
+            scatter_add(msg, chunk_dst, dim=0, out=out, dim_size=num_nodes)
 
         if self.aggr == 'mean':
             # Compute degree for normalization
             deg = torch.zeros(num_nodes, device=x.device, dtype=x.dtype)
             ones = torch.ones(num_edges, device=x.device, dtype=x.dtype)
-            scatter_add(ones, dst_idx, dim=0, out=deg)
+            scatter_add(ones, dst_idx, dim=0, out=deg, dim_size=num_nodes)
             deg = deg.clamp(min=1).unsqueeze(-1)
             out = out / deg
 

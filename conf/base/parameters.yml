@@ -132,13 +132,13 @@ explanation:
   # PaGE-Link parameters (Path-based GNN Explanation for heterogeneous Link prediction)
   # Aligned with original: https://github.com/amazon-science/page-link-path-based-gnn-explanation
   pagelink:
-    num_epochs: 100                         # Optimization epochs (with early stopping on weight norm convergence)
+    num_epochs: 200                         # Optimization epochs (with early stopping on weight norm convergence)
     lr: 0.001                               # Learning rate for edge mask optimization (Adam)
     alpha: 1.0                              # Weight for on-path loss (encourage high weights on paths)
     beta: 1.0                               # Weight for off-path loss (encourage low weights off paths)
-    k_paths: 5                              # Number of top paths to extract via Yen's algorithm
+    k_paths: 200                              # Number of top paths to extract via Yen's algorithm
     max_path_length: 3                      # Max path length for path extraction
-    top_k_edges: 100                        # Number of top important edges to extract
+    top_k_edges: 10000                        # Number of top important edges to extract
     num_hops: 2                             # Number of hops for k-hop subgraph extraction
     prune_max_degree: -1                    # Remove edges of nodes with degree > this (-1 to disable)
     k_core: 2                               # k for k-core subgraph extraction

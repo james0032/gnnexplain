@@ -94,7 +94,8 @@ class CompGCNKGModel(nn.Module):
     def encode(
         self,
         edge_index: torch.Tensor,
-        edge_type: torch.Tensor
+        edge_type: torch.Tensor,
+        edge_weight: torch.Tensor = None
     ) -> tuple:
         """
         Encode graph to get node and relation embeddings.
@@ -102,11 +103,13 @@ class CompGCNKGModel(nn.Module):
         Args:
             edge_index: Edge indices (2, num_edges)
             edge_type: Edge types (num_edges,)
+            edge_weight: Optional edge weights (num_edges,) for weighted message passing.
+                         Used by PaGE-Link explainer to learn edge masks.
 
         Returns:
             Tuple of (node_embeddings, relation_embeddings)
         """
-        return self.encoder(edge_index, edge_type)
+        return self.encoder(edge_index, edge_type, edge_weight=edge_weight)
 
     def decode(
         self,
@@ -207,7 +210,8 @@ class CompGCNKGModel(nn.Module):
         edge_type: torch.Tensor,
         head_idx: torch.Tensor,
         tail_idx: torch.Tensor,
-        rel_idx: torch.Tensor
+        rel_idx: torch.Tensor,
+        edge_weight: torch.Tensor = None
     ) -> torch.Tensor:
         """
         Full forward pass: encode + decode.
@@ -218,12 +222,13 @@ class CompGCNKGModel(nn.Module):
             head_idx: Head entity indices (batch_size,)
             tail_idx: Tail entity indices (batch_size,)
             rel_idx: Relation indices (batch_size,)
+            edge_weight: Optional edge weights (num_edges,) for weighted message passing
 
         Returns:
             Triple scores (batch_size,)
         """
         # Encode
-        node_emb, rel_emb = self.encode(edge_index, edge_type)
+        node_emb, rel_emb = self.encode(edge_index, edge_type, edge_weight=edge_weight)
 
         # Decode
         scores = self.decode(node_emb, rel_emb, head_idx, tail_idx, rel_idx)

@@ -81,7 +81,8 @@ class CompGCNEncoder(nn.Module):
     def forward(
         self,
         edge_index: torch.Tensor,
-        edge_type: torch.Tensor
+        edge_type: torch.Tensor,
+        edge_weight: torch.Tensor = None
     ) -> tuple:
         """
         Forward pass through CompGCN layers.
@@ -89,6 +90,8 @@ class CompGCNEncoder(nn.Module):
         Args:
             edge_index: Edge indices (2, num_edges)
             edge_type: Edge types (num_edges,)
+            edge_weight: Optional edge weights (num_edges,) for weighted message passing.
+                         Used by PaGE-Link explainer to learn edge masks.
 
         Returns:
             Tuple of (node_embeddings, relation_embeddings)
@@ -98,7 +101,7 @@ class CompGCNEncoder(nn.Module):
 
         # Pass through CompGCN layers
         for i, conv in enumerate(self.convs):
-            x, rel = conv(x, edge_index, edge_type, rel)
+            x, rel = conv(x, edge_index, edge_type, rel, edge_weight=edge_weight)
 
             # Apply activation and dropout (except last layer)
             if i < len(self.convs) - 1:
@@ -113,7 +116,8 @@ class CompGCNEncoder(nn.Module):
     def get_embeddings(
         self,
         edge_index: torch.Tensor,
-        edge_type: torch.Tensor
+        edge_type: torch.Tensor,
+        edge_weight: torch.Tensor = None
     ) -> dict:
         """
         Get final embeddings as a dictionary.
@@ -121,11 +125,12 @@ class CompGCNEncoder(nn.Module):
         Args:
             edge_index: Edge indices
             edge_type: Edge types
+            edge_weight: Optional edge weights for weighted message passing
 
         Returns:
             Dictionary with 'node_emb' and 'rel_emb'
         """
-        node_emb, rel_emb = self.forward(edge_index, edge_type)
+        node_emb, rel_emb = self.forward(edge_index, edge_type, edge_weight=edge_weight)
 
         return {
             'node_emb': node_emb,

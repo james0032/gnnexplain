@@ -81,7 +81,8 @@ class CompGCNConv(MessagePassing):
         x: torch.Tensor,
         edge_index: torch.Tensor,
         edge_type: torch.Tensor,
-        rel_emb: torch.Tensor
+        rel_emb: torch.Tensor,
+        edge_weight: Optional[torch.Tensor] = None
     ) -> tuple:
         """
         Forward pass.
@@ -91,6 +92,8 @@ class CompGCNConv(MessagePassing):
             edge_index: Edge indices (2, num_edges)
             edge_type: Edge types (num_edges,)
             rel_emb: Relation embeddings (num_relations, in_channels)
+            edge_weight: Optional edge weights (num_edges,) for weighted message passing.
+                         Used by PaGE-Link explainer to learn edge masks.
 
         Returns:
             Tuple of (updated node embeddings, updated relation embeddings)
@@ -109,7 +112,8 @@ class CompGCNConv(MessagePassing):
             x=x,
             edge_type=edge_type,
             rel_emb=rel_emb,
-            mode='forward'
+            mode='forward',
+            edge_weight=edge_weight
         )
 
         # Combine self-loop and forward messages
@@ -128,7 +132,8 @@ class CompGCNConv(MessagePassing):
         x_j: torch.Tensor,
         edge_type: torch.Tensor,
         rel_emb: torch.Tensor,
-        mode: str
+        mode: str,
+        edge_weight: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """
         Construct messages.
@@ -138,6 +143,7 @@ class CompGCNConv(MessagePassing):
             edge_type: Edge types
             rel_emb: Relation embeddings
             mode: 'forward' or 'backward'
+            edge_weight: Optional edge weights (num_edges,) for weighted message passing
 
         Returns:
             Messages after composition
@@ -165,6 +171,10 @@ class CompGCNConv(MessagePassing):
         else:
             msg = self.W_backward.weight @ msg.t()
             msg = msg.t()
+
+        # Scale messages by edge weights (used by PaGE-Link explainer)
+        if edge_weight is not None:
+            msg = msg * edge_weight.unsqueeze(-1)
 
         return msg
 

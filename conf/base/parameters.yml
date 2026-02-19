@@ -130,15 +130,18 @@ explanation:
     force_reextract: false                # Force re-extraction of subgraphs even if cached
 
   # PaGE-Link parameters (Path-based GNN Explanation for heterogeneous Link prediction)
-  # Based on: https://github.com/amazon-science/page-link-path-based-gnn-explanation
+  # Aligned with original: https://github.com/amazon-science/page-link-path-based-gnn-explanation
   pagelink:
-    num_epochs: 600                         # Optimization epochs for edge mask learning, after 600 loss has effectively plateaued
-    lr: 0.01                                # Learning rate for edge mask optimization
-    alpha: 1.0                              # Weight for prediction preservation loss
-    beta: 0.1                               # Weight for edge mask sparsity regularization
-    k_paths: 20                             # Number of top paths to extract
-    max_path_length: 3                      # Max path length for subgraph extraction (only edges on paths <= N)
-    top_k_edges: 1000                        # Number of top important edges to extract
+    num_epochs: 100                         # Optimization epochs (with early stopping on weight norm convergence)
+    lr: 0.001                               # Learning rate for edge mask optimization (Adam)
+    alpha: 1.0                              # Weight for on-path loss (encourage high weights on paths)
+    beta: 1.0                               # Weight for off-path loss (encourage low weights off paths)
+    k_paths: 5                              # Number of top paths to extract via Yen's algorithm
+    max_path_length: 3                      # Max path length for path extraction
+    top_k_edges: 100                        # Number of top important edges to extract
+    num_hops: 2                             # Number of hops for k-hop subgraph extraction
+    prune_max_degree: -1                    # Remove edges of nodes with degree > this (-1 to disable)
+    k_core: 2                               # k for k-core subgraph extraction
     checkpoint_dir: "data/06_explainer_cache"  # Directory for PaGE-Link checkpoints
 
   # Legacy explanation settings (for old explanation pipeline)
